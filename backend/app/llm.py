@@ -5,11 +5,14 @@ import json
 
 try:
     from langfuse import Langfuse
-    langfuse = Langfuse(
-        public_key=os.environ.get("LANGFUSE_PUBLIC_KEY"),
-        secret_key=os.environ.get("LANGFUSE_SECRET_KEY"),
-        host=os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
-    ) if os.environ.get("LANGFUSE_PUBLIC_KEY") else None
+    # Temporarily disable Langfuse due to auth issues
+    langfuse = None
+    # Uncomment below when credentials are verified
+    # langfuse = Langfuse(
+    #     public_key=os.environ.get("LANGFUSE_PUBLIC_KEY"),
+    #     secret_key=os.environ.get("LANGFUSE_SECRET_KEY"),
+    #     host=os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    # ) if os.environ.get("LANGFUSE_PUBLIC_KEY") else None
 except ImportError:
     langfuse = None
 
@@ -39,13 +42,15 @@ def claude_call(messages, model="claude-3-5-haiku-20241022", system=None, tools=
                 usage = type('obj', (object,), {'input_tokens': 10, 'output_tokens': 20})
             return MockMessage()
         
-        resp = client.messages.create(
-            model=model,
-            max_tokens=1000,
-            system=system or SYSTEM_ORCHESTRATOR,
-            messages=messages,
-            tools=tools
-        )
+        kwargs = {
+            'model': model,
+            'max_tokens': 1000,
+            'system': system or SYSTEM_ORCHESTRATOR,
+            'messages': messages
+        }
+        if tools:
+            kwargs['tools'] = tools
+        resp = client.messages.create(**kwargs)
         
         latency = int((time.time() - start) * 1000)
         

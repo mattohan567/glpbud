@@ -8,9 +8,12 @@ from supabase import create_client, Client
 from datetime import datetime, timedelta
 import uuid
 from dotenv import load_dotenv
+import pathlib
 
 # Load environment variables from .env file
-load_dotenv()
+# Try to load from parent directory (where .env actually is)
+env_path = pathlib.Path(__file__).parent.parent.parent / '.env'
+load_dotenv(dotenv_path=env_path)
 
 from .schemas import (
     ParseMealTextReq, ParseMealImageReq, MealParse,
