@@ -5,14 +5,11 @@ import json
 
 try:
     from langfuse import Langfuse
-    # Temporarily disable Langfuse due to auth issues
-    langfuse = None
-    # Uncomment below when credentials are verified
-    # langfuse = Langfuse(
-    #     public_key=os.environ.get("LANGFUSE_PUBLIC_KEY"),
-    #     secret_key=os.environ.get("LANGFUSE_SECRET_KEY"),
-    #     host=os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
-    # ) if os.environ.get("LANGFUSE_PUBLIC_KEY") else None
+    langfuse = Langfuse(
+        public_key=os.environ.get("LANGFUSE_PUBLIC_KEY"),
+        secret_key=os.environ.get("LANGFUSE_SECRET_KEY"),
+        host=os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    ) if os.environ.get("LANGFUSE_PUBLIC_KEY") else None
 except ImportError:
     langfuse = None
 
