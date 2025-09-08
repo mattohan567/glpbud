@@ -1,6 +1,9 @@
 import json
 from typing import Optional, List, Dict, Any
-from app.schemas import MealParse, MealItem, MacroTotals
+try:
+    from app.schemas import MealParse, MealItem, MacroTotals
+except ImportError:
+    from backend.app.schemas import MealParse, MealItem, MacroTotals
 
 class VisionNutrition:
     def parse(self, image_url: str, hints: Optional[str] = None) -> MealParse:

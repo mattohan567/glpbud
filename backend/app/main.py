@@ -22,7 +22,12 @@ from .schemas import (
     IdResp, TodayResp, TrendsResp, CoachResp
 )
 from .llm import claude_call
-from tools import vision_nutrition, text_nutrition, exercise_estimator, glp1_adherence, insights, safety_guard
+try:
+    # Try local development import first
+    from tools import vision_nutrition, text_nutrition, exercise_estimator, glp1_adherence, insights, safety_guard
+except ImportError:
+    # Production Docker import
+    from backend.tools import vision_nutrition, text_nutrition, exercise_estimator, glp1_adherence, insights, safety_guard
 
 sentry_sdk.init(dsn=os.environ.get("SENTRY_DSN"), traces_sample_rate=0.2)
 

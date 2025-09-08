@@ -162,6 +162,7 @@ Temporary Items
 
 # Claude
 .claude/
+CLAUDE.md
 
 # Miscellaneous
 *.orig
