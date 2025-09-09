@@ -2,6 +2,11 @@
 
 iOS-first, Claude-powered weight management app with agentic orchestration and production observability.
 
+**Status**: 
+- ✅ **Backend**: Fully deployed and operational on Fly.io
+- ✅ **iOS App**: Foundation complete with authentication and API integration
+- 🔄 **Next**: Create test account in Supabase for testing
+
 ## Architecture
 
 - **iOS App**: SwiftUI + MVVM with offline-first design and optimistic UI
@@ -54,16 +59,26 @@ make dev
 ### iOS Setup
 
 ```bash
-# Install dependencies
-cd ios
-bundle install
-
-# Open in Xcode
+# Open Xcode project
+cd ios/GLP1Coach
 open GLP1Coach.xcodeproj
 
-# Set API_BASE in scheme environment variables
+# Add Package Dependencies in Xcode:
+# 1. Supabase Swift SDK: https://github.com/supabase/supabase-swift
+# 2. Charts: https://github.com/ChartsOrg/Charts
+
 # Build and run (Cmd+R)
 ```
+
+**First Time Setup**:
+1. Create test account in Supabase Dashboard:
+   - Go to Authentication → Users → Add User
+   - Email: `test@example.com`, Password: `test123456`
+2. Or use Sign Up in the app to create the account
+
+**Production URLs**:
+- Backend API: `https://glp1coach-api.fly.dev`
+- Supabase: `https://hugqvmmdfuwounhalpxd.supabase.co`
 
 ### Running Tests
 
