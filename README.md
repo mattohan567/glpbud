@@ -4,8 +4,9 @@ iOS-first, Claude-powered weight management app with agentic orchestration and p
 
 **Status**: 
 - ✅ **Backend**: Fully deployed and operational on Fly.io
-- ✅ **iOS App**: Foundation complete with authentication and API integration
-- 🔄 **Next**: Create test account in Supabase for testing
+- ✅ **iOS App**: Complete with all core features and authentication
+- ✅ **Critical Fixes**: Data loss bug resolved, compilation issues fixed
+- 🔄 **Next**: GLP-1 medication tracking features (Phase 1 & 2 ready for implementation)
 
 ## Architecture
 
@@ -19,9 +20,11 @@ iOS-first, Claude-powered weight management app with agentic orchestration and p
 ## Features
 
 - 📸 **AI Food Logging**: Photo and text parsing with Claude Vision
-- 💊 **GLP-1 Tracking**: Medication schedules and adherence
+- 💊 **GLP-1 Tracking**: Medication schedules and adherence (infrastructure ready)
 - 📊 **Trends & Analytics**: Weight, macros, and calorie tracking
 - 🤖 **AI Coach**: Safety-checked coaching with medical disclaimers
+- 📱 **History Tab**: Shows actual food names with edit functionality
+- 🔐 **Security**: Comprehensive validation, rate limiting, and health checks
 - 🔄 **Offline Sync**: Local-first with background sync
 - 🔍 **Full Observability**: LLM traces, costs, and performance metrics
 
@@ -75,6 +78,12 @@ open GLP1Coach.xcodeproj
    - Go to Authentication → Users → Add User
    - Email: `test@example.com`, Password: `test123456`
 2. Or use Sign Up in the app to create the account
+
+**Recent Major Fixes**:
+- 🚨 **Critical**: Removed dangerous user data deletion in authentication flow
+- 🔧 **iOS**: Fixed compilation errors (Info.plist, HistoryView, DataStore)
+- 📱 **History**: Enhanced to show actual food names instead of generic labels
+- 🛡️ **Security**: Added comprehensive validation and error handling
 
 **Production URLs**:
 - Backend API: `https://glp1coach-api.fly.dev`
