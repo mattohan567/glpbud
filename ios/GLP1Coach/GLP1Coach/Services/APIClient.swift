@@ -1,6 +1,23 @@
 import Foundation
 import Combine
 
+enum APIError: Error, LocalizedError {
+    case unauthorized
+    case serverError(Int)
+    case decodingError
+    
+    var errorDescription: String? {
+        switch self {
+        case .unauthorized:
+            return "Your session has expired. Please log in again."
+        case .serverError(let code):
+            return "Server error (\(code)). Please try again."
+        case .decodingError:
+            return "Failed to parse response. Please try again."
+        }
+    }
+}
+
 @MainActor
 final class APIClient: ObservableObject {
     private let base: URL
@@ -8,7 +25,19 @@ final class APIClient: ObservableObject {
     
     init() {
         self.base = URL(string: Config.apiBaseURL)!
+        
+        // In development, use test token if no JWT available
+        #if DEBUG
+        if let jwt = UserDefaults.standard.string(forKey: "supabase_jwt"), !jwt.isEmpty {
+            self.authToken = jwt
+        } else {
+            // Use test token for development
+            self.authToken = "test-token"
+            print("🔧 Using test token for development")
+        }
+        #else
         self.authToken = UserDefaults.standard.string(forKey: "supabase_jwt")
+        #endif
     }
     
     func updateAuthToken(_ token: String) {
@@ -25,13 +54,14 @@ final class APIClient: ObservableObject {
         return try await post("/parse/meal-text", Body(text: text, hints: hints))
     }
     
-    func parseMealImage(imageURL: URL, hints: String? = nil) async throws -> MealParseDTO {
+    func parseMealImage(imageUrl: String, hints: String? = nil) async throws -> MealParseDTO {
         struct Body: Codable {
             let image_url: String
             let hints: String?
         }
-        return try await post("/parse/meal-image", Body(image_url: imageURL.absoluteString, hints: hints))
+        return try await post("/parse/meal-image", Body(image_url: imageUrl, hints: hints))
     }
+    
     
     // MARK: - Logging Endpoints
     
@@ -90,11 +120,17 @@ final class APIClient: ObservableObject {
     
     // MARK: - Coach Endpoint
     
-    func askCoach(question: String) async throws -> CoachResp {
+    func askCoach(question: String, contextOptIn: Bool = false) async throws -> CoachResp {
         struct Body: Codable {
             let question: String
+            let context_opt_in: Bool
         }
-        return try await post("/coach/ask", Body(question: question))
+        return try await post("/coach/ask", Body(question: question, context_opt_in: contextOptIn))
+    }
+    
+    func chatWithAgenticCoach(message: String, contextOptIn: Bool = true) async throws -> AgenticCoachResp {
+        let body = CoachChatReq(message: message, context_opt_in: contextOptIn)
+        return try await post("/coach/chat", body)
     }
     
     // MARK: - Medication Endpoints
@@ -119,6 +155,38 @@ final class APIClient: ObservableObject {
         ))
     }
     
+    // MARK: - History Endpoints
+    
+    func getHistory(limit: Int = 50, offset: Int = 0, typeFilter: String? = nil) async throws -> HistoryResp {
+        var urlString = "/history?limit=\(limit)&offset=\(offset)"
+        if let typeFilter = typeFilter {
+            urlString += "&type_filter=\(typeFilter)"
+        }
+        return try await get(urlString)
+    }
+    
+    func updateMeal(entryId: String, items: [MealItemDTO], notes: String?) async throws -> IdResp {
+        let body = UpdateMealReq(items: items, notes: notes)
+        return try await put("/history/meal/\(entryId)", body)
+    }
+    
+    func updateExercise(entryId: String, type: String, durationMin: Double, intensity: String?, estKcal: Int?) async throws -> IdResp {
+        let body = UpdateExerciseReq(type: type, duration_min: durationMin, intensity: intensity, est_kcal: estKcal)
+        return try await put("/history/exercise/\(entryId)", body)
+    }
+    
+    func updateWeight(entryId: String, weightKg: Double, method: String) async throws -> IdResp {
+        let body = UpdateWeightReq(weight_kg: weightKg, method: method)
+        return try await put("/history/weight/\(entryId)", body)
+    }
+    
+    func deleteEntry(entryType: String, entryId: String) async throws {
+        struct DeleteResp: Codable {
+            let message: String
+        }
+        let _: DeleteResp = try await delete("/history/\(entryType)/\(entryId)")
+    }
+    
     // MARK: - Network Helpers
     
     private func get<T: Decodable>(_ path: String) async throws -> T {
@@ -130,8 +198,32 @@ final class APIClient: ObservableObject {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         
-        let (data, _) = try await URLSession.shared.data(for: request)
-        return try JSONDecoder().decode(T.self, from: data)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        // Check for HTTP errors
+        if let httpResponse = response as? HTTPURLResponse {
+            print("📡 GET \(path) - Status: \(httpResponse.statusCode)")
+            
+            if httpResponse.statusCode == 401 {
+                throw APIError.unauthorized
+            } else if httpResponse.statusCode >= 400 {
+                // Log error response for debugging
+                if let errorString = String(data: data, encoding: .utf8) {
+                    print("❌ Error response: \(errorString)")
+                }
+                throw APIError.serverError(httpResponse.statusCode)
+            }
+        }
+        
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            print("❌ Decoding error for \(path): \(error)")
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("Response was: \(responseString)")
+            }
+            throw APIError.decodingError
+        }
     }
     
     private func post<T: Decodable, B: Encodable>(_ path: String, _ body: B) async throws -> T {
@@ -146,7 +238,108 @@ final class APIClient: ObservableObject {
         
         request.httpBody = try JSONEncoder().encode(body)
         
-        let (data, _) = try await URLSession.shared.data(for: request)
-        return try JSONDecoder().decode(T.self, from: data)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        // Check for HTTP errors
+        if let httpResponse = response as? HTTPURLResponse {
+            print("📡 POST \(path) - Status: \(httpResponse.statusCode)")
+            
+            if httpResponse.statusCode == 401 {
+                throw APIError.unauthorized
+            } else if httpResponse.statusCode >= 400 {
+                // Log error response for debugging
+                if let errorString = String(data: data, encoding: .utf8) {
+                    print("❌ Error response: \(errorString)")
+                }
+                throw APIError.serverError(httpResponse.statusCode)
+            }
+        }
+        
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            print("❌ Decoding error for \(path): \(error)")
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("Response was: \(responseString)")
+            }
+            throw APIError.decodingError
+        }
+    }
+    
+    private func put<T: Decodable, B: Encodable>(_ path: String, _ body: B) async throws -> T {
+        let url = URL(string: base.absoluteString + path)!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        request.httpBody = try JSONEncoder().encode(body)
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        // Check for HTTP errors
+        if let httpResponse = response as? HTTPURLResponse {
+            print("📡 PUT \(path) - Status: \(httpResponse.statusCode)")
+            
+            if httpResponse.statusCode == 401 {
+                throw APIError.unauthorized
+            } else if httpResponse.statusCode >= 400 {
+                // Log error response for debugging
+                if let errorString = String(data: data, encoding: .utf8) {
+                    print("❌ Error response: \(errorString)")
+                }
+                throw APIError.serverError(httpResponse.statusCode)
+            }
+        }
+        
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            print("❌ Decoding error for \(path): \(error)")
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("Response was: \(responseString)")
+            }
+            throw APIError.decodingError
+        }
+    }
+    
+    private func delete<T: Decodable>(_ path: String) async throws -> T {
+        let url = URL(string: base.absoluteString + path)!
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        
+        if let token = authToken {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        // Check for HTTP errors
+        if let httpResponse = response as? HTTPURLResponse {
+            print("📡 PUT \(path) - Status: \(httpResponse.statusCode)")
+            
+            if httpResponse.statusCode == 401 {
+                throw APIError.unauthorized
+            } else if httpResponse.statusCode >= 400 {
+                // Log error response for debugging
+                if let errorString = String(data: data, encoding: .utf8) {
+                    print("❌ Error response: \(errorString)")
+                }
+                throw APIError.serverError(httpResponse.statusCode)
+            }
+        }
+        
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            print("❌ Decoding error for \(path): \(error)")
+            if let responseString = String(data: data, encoding: .utf8) {
+                print("Response was: \(responseString)")
+            }
+            throw APIError.decodingError
+        }
     }
 }

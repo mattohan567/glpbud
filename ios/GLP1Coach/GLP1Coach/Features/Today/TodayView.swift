@@ -29,8 +29,8 @@ struct TodayView: View {
                     }
                     
                     // Weight Card
-                    if let weight = store.latestWeight {
-                        WeightCard(weight: weight)
+                    if let weightKg = store.latestWeight {
+                        LatestWeightCard(weightKg: weightKg)
                     }
                 }
                 .padding()
@@ -42,17 +42,16 @@ struct TodayView: View {
             .task {
                 await loadTodayStats()
             }
+            .onAppear {
+                Task {
+                    await loadTodayStats()
+                }
+            }
         }
     }
     
     private func loadTodayStats() async {
-        isLoading = true
-        do {
-            store.todayStats = try await apiClient.getToday()
-        } catch {
-            print("Error loading today stats: \(error)")
-        }
-        isLoading = false
+        await store.refreshTodayStats(apiClient: apiClient)
     }
 }
 
@@ -211,6 +210,31 @@ struct WeightCard: View {
             }
             Spacer()
             Text(weight.timestamp, style: .date)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding()
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .shadow(radius: 2)
+    }
+}
+
+struct LatestWeightCard: View {
+    let weightKg: Double
+    
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading) {
+                Text("Latest Weight")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text(String(format: "%.1f kg", weightKg))
+                    .font(.title3)
+                    .fontWeight(.bold)
+            }
+            Spacer()
+            Text("From API")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }

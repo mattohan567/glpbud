@@ -11,6 +11,7 @@ final class AuthManager: ObservableObject {
     
     private var supabase: SupabaseClient!
     private var authStateListener: Task<Void, Never>?
+    private weak var dataStore: DataStore?
     
     static let shared = AuthManager()
     
@@ -21,6 +22,10 @@ final class AuthManager: ObservableObject {
         )
         
         setupAuthListener()
+    }
+    
+    func setDataStore(_ dataStore: DataStore) {
+        self.dataStore = dataStore
     }
     
     private func setupAuthListener() {
@@ -68,6 +73,7 @@ final class AuthManager: ObservableObject {
                 self.currentUser = nil
                 self.isAuthenticated = false
                 UserDefaults.standard.removeObject(forKey: "supabase_jwt")
+                self.dataStore?.clearAllData()
             }
             
         default:
@@ -101,6 +107,21 @@ final class AuthManager: ObservableObject {
     
     func signIn(email: String, password: String) async throws {
         errorMessage = nil
+        
+        #if DEBUG
+        // Development bypass for testing without Supabase
+        if email == "test@example.com" && password == "test123456" {
+            print("🔧 Using development bypass for testing")
+            await MainActor.run {
+                // Create a mock user for testing
+                self.isAuthenticated = true
+                UserDefaults.standard.set("test-token", forKey: "supabase_jwt")
+                // Note: currentUser will remain nil in bypass mode
+            }
+            return
+        }
+        #endif
+        
         do {
             let session = try await supabase.auth.signIn(
                 email: email,
@@ -127,6 +148,7 @@ final class AuthManager: ObservableObject {
                 self.currentUser = nil
                 self.isAuthenticated = false
                 UserDefaults.standard.removeObject(forKey: "supabase_jwt")
+                self.dataStore?.clearAllData()
             }
         } catch {
             await MainActor.run {

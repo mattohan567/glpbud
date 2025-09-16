@@ -35,6 +35,9 @@ struct GLP1CoachApp: App {
     }
     
     private func setupApp() {
+        // Connect DataStore to AuthManager for logout cleanup
+        authManager.setDataStore(store)
+        
         // Update API client with auth token
         Task {
             if let token = await authManager.getAccessToken() {
@@ -60,6 +63,11 @@ struct MainTabView: View {
             CoachView()
                 .tabItem {
                     Label("Coach", systemImage: "message")
+                }
+            
+            HistoryView()
+                .tabItem {
+                    Label("History", systemImage: "clock")
                 }
             
             TrendsView()

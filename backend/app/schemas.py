@@ -31,7 +31,7 @@ class ParseMealTextReq(BaseModel):
     hints: Optional[str] = None
 
 class ParseMealImageReq(BaseModel):
-    image_url: HttpUrl
+    image_url: str  # Changed from HttpUrl to str to support base64 data URLs
     user_id: Optional[str] = None
     hints: Optional[str] = None
 
@@ -98,3 +98,43 @@ class CoachResp(BaseModel):
     answer: str
     disclaimers: List[str] = []
     references: List[str] = []
+
+class CoachChatReq(BaseModel):
+    message: str
+    context_opt_in: bool = True
+
+class LoggedAction(BaseModel):
+    type: Literal["meal", "exercise", "weight"]
+    id: str
+    summary: str
+    details: dict
+
+class AgenticCoachResp(BaseModel):
+    message: str
+    actions_taken: List[LoggedAction] = []
+    disclaimers: List[str] = []
+
+class HistoryEntryResp(BaseModel):
+    id: str
+    ts: datetime
+    type: Literal["meal", "exercise", "weight", "medication"]
+    display_name: str
+    details: dict
+
+class HistoryResp(BaseModel):
+    entries: List[HistoryEntryResp]
+    total_count: int
+
+class UpdateMealReq(BaseModel):
+    items: List[MealItem]
+    notes: Optional[str] = None
+
+class UpdateExerciseReq(BaseModel):
+    type: str
+    duration_min: float
+    intensity: Optional[Literal["low","moderate","high"]] = None
+    est_kcal: Optional[int] = None
+
+class UpdateWeightReq(BaseModel):
+    weight_kg: float
+    method: Optional[Literal["scale","manual","healthkit"]] = "manual"

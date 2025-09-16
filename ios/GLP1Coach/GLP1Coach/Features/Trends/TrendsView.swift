@@ -25,19 +25,15 @@ struct TrendsView: View {
                     .padding(.horizontal)
                     
                     // Weight Chart
-                    if !store.weights.isEmpty {
-                        WeightChartView(weights: store.weights, range: selectedRange)
-                    }
+                    WeightChartView(weights: [], range: selectedRange)
                     
-                    // Calorie Chart
-                    if !store.meals.isEmpty {
-                        CalorieChartView(meals: store.meals, exercises: store.exercises, range: selectedRange)
-                    }
+                    // Calorie Chart  
+                    CalorieChartView(meals: [], exercises: [], range: selectedRange)
                     
                     // Stats Summary
                     StatsCard(
-                        totalMeals: store.meals.count,
-                        totalExercises: store.exercises.count,
+                        totalMeals: 0,
+                        totalExercises: 0,
                         avgCalories: store.todayCaloriesIn
                     )
                 }
@@ -64,11 +60,11 @@ struct WeightChartView: View {
                 .font(.headline)
                 .padding(.horizontal)
             
-            if filteredWeights.isEmpty {
-                Text("No weight data")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 200)
-            } else {
+            Text("Weight trends coming soon!")
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, minHeight: 200)
+            
+            if false { // Disable chart for now
                 Chart(filteredWeights) { weight in
                     LineMark(
                         x: .value("Date", weight.timestamp),
@@ -130,11 +126,11 @@ struct CalorieChartView: View {
                 .font(.headline)
                 .padding(.horizontal)
             
-            if dailyData.isEmpty {
-                Text("No calorie data")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 200)
-            } else {
+            Text("Calorie trends coming soon!")
+                .foregroundColor(.secondary) 
+                .frame(maxWidth: .infinity, minHeight: 200)
+            
+            if false { // Disable chart for now
                 Chart(dailyData, id: \.date) { data in
                     BarMark(
                         x: .value("Date", data.date),

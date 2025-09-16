@@ -2,6 +2,10 @@ import anthropic
 import os
 import time
 import json
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 try:
     from langfuse import Langfuse
@@ -14,6 +18,13 @@ except ImportError:
     langfuse = None
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY")) if os.environ.get("ANTHROPIC_API_KEY") else None
+
+# Debug logging
+if client:
+    print(f"✅ Claude API client initialized successfully")
+else:
+    print(f"⚠️ WARNING: Claude API client not initialized - API key missing or invalid")
+    print(f"   API key present: {bool(os.environ.get('ANTHROPIC_API_KEY'))}")
 
 SYSTEM_ORCHESTRATOR = """You are the Orchestrator for "GLP-1 Coach," an iOS-first weight management app.
 Objectives: (1) minimize user friction to log meals/exercise/meds, (2) ensure safety and supportive tone,
@@ -33,11 +44,14 @@ def claude_call(messages, model="claude-3-5-haiku-20241022", system=None, tools=
     
     try:
         if not client:
+            print(f"⚠️ Claude API call attempted but client not initialized - using fallback")
             # Return a mock response when no API key is configured
             class MockMessage:
                 content = [type('obj', (object,), {'text': 'I can help with that! For a nutritious breakfast, consider eggs, Greek yogurt, cottage cheese, or lean meats like turkey bacon.'})]
                 usage = type('obj', (object,), {'input_tokens': 10, 'output_tokens': 20})
             return MockMessage()
+        
+        print(f"🤖 Calling Claude API with model: {model}")
         
         kwargs = {
             'model': model,
