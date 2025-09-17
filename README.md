@@ -2,17 +2,18 @@
 
 iOS-first, Claude-powered weight management app with agentic orchestration and production observability.
 
-**Status**: 
+**Status**:
 - ✅ **Backend**: Fully deployed and operational on Fly.io
-- ✅ **iOS App**: Complete with all core features and authentication
-- ✅ **Critical Fixes**: Data loss bug resolved, compilation issues fixed
+- ✅ **iOS App**: Complete with enhanced trends UI and all core features
+- ✅ **Latest Fixes**: Nutrition parsing quantity scaling + iOS date formatting resolved
+- ✅ **UI Enhanced**: Redesigned trends with separate charts/streaks tabs + 5 time ranges
 - 🔄 **Next**: GLP-1 medication tracking features (Phase 1 & 2 ready for implementation)
 
 ## Architecture
 
 - **iOS App**: SwiftUI + MVVM with offline-first design and optimistic UI
 - **Backend**: FastAPI thin control plane with event-driven architecture
-- **AI**: Claude tool orchestration with Haiku/Sonnet escalation
+- **AI**: Claude tool orchestration with Sonnet for nutrition parsing
 - **Database**: Supabase (Postgres + Auth + Storage)
 - **Observability**: Langfuse (LLM traces), Sentry, OpenTelemetry
 - **Deployment**: Fly.io (API + Worker), TestFlight (iOS)
@@ -21,7 +22,7 @@ iOS-first, Claude-powered weight management app with agentic orchestration and p
 
 - 📸 **AI Food Logging**: Photo and text parsing with Claude Vision
 - 💊 **GLP-1 Tracking**: Medication schedules and adherence (infrastructure ready)
-- 📊 **Trends & Analytics**: Weight, macros, and calorie tracking
+- 📊 **Enhanced Trends**: Weight, macros, and calorie tracking with 5 time ranges (3d, 7d, 30d, 90d, all)
 - 🤖 **AI Coach**: Safety-checked coaching with medical disclaimers
 - 📱 **History Tab**: Shows actual food names with edit functionality
 - 🔐 **Security**: Comprehensive validation, rate limiting, and health checks
@@ -79,11 +80,13 @@ open GLP1Coach.xcodeproj
    - Email: `test@example.com`, Password: `test123456`
 2. Or use Sign Up in the app to create the account
 
-**Recent Major Fixes**:
-- 🚨 **Critical**: Removed dangerous user data deletion in authentication flow
-- 🔧 **iOS**: Fixed compilation errors (Info.plist, HistoryView, DataStore)
-- 📱 **History**: Enhanced to show actual food names instead of generic labels
-- 🛡️ **Security**: Added comprehensive validation and error handling
+**Recent Major Updates**:
+- 🧠 **Nutrition Parsing**: Fixed quantity scaling (upgraded to Claude Sonnet)
+- 📅 **iOS Date Parsing**: Resolved trends data formatting inconsistencies
+- 📊 **Trends UI**: Redesigned with separate charts/streaks tabs + 5 time ranges
+- 🚨 **Previous Critical Fix**: Removed dangerous user data deletion in authentication flow
+- 🔧 **Previous iOS Fixes**: Compilation errors (Info.plist, HistoryView, DataStore)
+- 📱 **Previous Enhancement**: History shows actual food names instead of generic labels
 
 **Production URLs**:
 - Backend API: `https://glp1coach-api.fly.dev`
@@ -127,7 +130,7 @@ make deploy-ios
 - `POST /parse/meal-text` - Parse meal text
 - `POST /log/{meal|exercise|weight|med}` - Log entries
 - `GET /today` - Today's stats
-- `GET /trends?range=7d|30d|90d` - Historical trends
+- `GET /trends?range=3d|7d|30d|90d|all` - Historical trends (5 time ranges)
 - `POST /coach/ask` - AI coaching
 - `GET /med/next` - Next medication dose
 

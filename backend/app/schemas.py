@@ -138,3 +138,34 @@ class UpdateExerciseReq(BaseModel):
 class UpdateWeightReq(BaseModel):
     weight_kg: float
     method: Optional[Literal["scale","manual","healthkit"]] = "manual"
+
+# Trends and Streaks DTOs
+class WeightPoint(BaseModel):
+    date: datetime
+    weight_kg: float
+
+class CaloriePoint(BaseModel):
+    date: datetime
+    intake: int
+    burned: int
+    net: int
+
+class StreakInfo(BaseModel):
+    type: Literal["logging", "meals", "exercise", "weight"]
+    current_streak: int
+    longest_streak: int
+    last_activity: Optional[datetime] = None
+
+class Achievement(BaseModel):
+    id: str
+    title: str
+    description: str
+    earned_at: Optional[datetime] = None
+    progress: float  # 0.0 to 1.0
+
+class TrendsResp(BaseModel):
+    weight_trend: List[WeightPoint]
+    calorie_trend: List[CaloriePoint]
+    current_streaks: List[StreakInfo]
+    achievements: List[Achievement]
+    insights: List[str]

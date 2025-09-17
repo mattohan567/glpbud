@@ -205,14 +205,24 @@ struct ActionCard: View {
     private var details: String? {
         if action.type == "meal" {
             let calories = action.details["calories"]?.value as? Int ?? 0
-            let protein = action.details["protein_g"]?.value as? Double ?? 0
+            // Handle both Int and Double for protein_g
+            let protein = (action.details["protein_g"]?.value as? Double) ??
+                         Double(action.details["protein_g"]?.value as? Int ?? 0)
             return "\(calories) kcal • \(Int(protein))g protein"
         } else if action.type == "exercise" {
-            let duration = action.details["duration_minutes"]?.value as? Double ?? 0
-            let burned = action.details["calories_burned"]?.value as? Int ?? 0
+            // Check both field name variants for duration
+            let duration = (action.details["duration_minutes"]?.value as? Double) ??
+                          (action.details["duration_min"]?.value as? Double) ??
+                          Double((action.details["duration_minutes"]?.value as? Int) ??
+                                (action.details["duration_min"]?.value as? Int) ?? 0)
+            // Check both field name variants for calories
+            let burned = (action.details["calories_burned"]?.value as? Int) ??
+                        (action.details["est_kcal"]?.value as? Int) ?? 0
             return "\(Int(duration)) min • \(burned) kcal burned"
         } else if action.type == "weight" {
-            let weight = action.details["weight_kg"]?.value as? Double ?? 0
+            // Handle both Int and Double for weight_kg
+            let weight = (action.details["weight_kg"]?.value as? Double) ??
+                        Double(action.details["weight_kg"]?.value as? Int ?? 0)
             return "\(String(format: "%.1f", weight)) kg"
         }
         return nil

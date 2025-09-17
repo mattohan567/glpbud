@@ -136,8 +136,30 @@ final class DataStore: ObservableObject {
             offlineMode = false
             saveCachedData()
         } catch {
-            errorMessage = "Failed to refresh data: \(error.localizedDescription)"
-            offlineMode = true
+            print("⚠️ Failed to refresh today stats: \(error)")
+
+            // Provide more specific error messages based on error type
+            if let apiError = error as? APIError {
+                switch apiError {
+                case .unauthorized:
+                    errorMessage = "Session expired. Please sign in again."
+                    offlineMode = true
+                case .serverError(let code):
+                    errorMessage = "Server temporarily unavailable (\(code))"
+                    offlineMode = true
+                case .decodingError:
+                    errorMessage = "Data format error. Using cached data."
+                    offlineMode = false // This isn't necessarily an offline issue
+                }
+            } else if (error as NSError).code == -1009 {
+                // Network offline error
+                errorMessage = "No internet connection. Using cached data."
+                offlineMode = true
+            } else {
+                errorMessage = "Connection failed. Using cached data."
+                offlineMode = true
+            }
+
             // Keep using cached data
         }
         isLoading = false
@@ -161,11 +183,22 @@ final class DataStore: ObservableObject {
                         questions: nil,
                         low_confidence: meals[i].confidence < 0.6
                     )
-                    let result = try await apiClient.logMeal(meal: meals[i], parse: mealParse)
+                    _ = try await apiClient.logMeal(meal: meals[i], parse: mealParse)
                     meals[i].syncStatus = .synced
                 } catch {
                     meals[i].syncStatus = .failed
-                    syncErrors.append("Failed to sync meal: \(error.localizedDescription)")
+                    if let apiError = error as? APIError {
+                        switch apiError {
+                        case .unauthorized:
+                            syncErrors.append("Authentication required to sync meal")
+                        case .serverError(let code):
+                            syncErrors.append("Server error syncing meal (\(code))")
+                        case .decodingError:
+                            syncErrors.append("Data format error syncing meal")
+                        }
+                    } else {
+                        syncErrors.append("Failed to sync meal: \(error.localizedDescription)")
+                    }
                 }
             }
         }
@@ -175,11 +208,22 @@ final class DataStore: ObservableObject {
             if exercises[i].syncStatus == .pending {
                 exercises[i].syncStatus = .syncing
                 do {
-                    let result = try await apiClient.logExercise(exercises[i])
+                    _ = try await apiClient.logExercise(exercises[i])
                     exercises[i].syncStatus = .synced
                 } catch {
                     exercises[i].syncStatus = .failed
-                    syncErrors.append("Failed to sync exercise: \(error.localizedDescription)")
+                    if let apiError = error as? APIError {
+                        switch apiError {
+                        case .unauthorized:
+                            syncErrors.append("Authentication required to sync exercise")
+                        case .serverError(let code):
+                            syncErrors.append("Server error syncing exercise (\(code))")
+                        case .decodingError:
+                            syncErrors.append("Data format error syncing exercise")
+                        }
+                    } else {
+                        syncErrors.append("Failed to sync exercise: \(error.localizedDescription)")
+                    }
                 }
             }
         }
@@ -189,11 +233,22 @@ final class DataStore: ObservableObject {
             if weights[i].syncStatus == .pending {
                 weights[i].syncStatus = .syncing
                 do {
-                    let result = try await apiClient.logWeight(weights[i])
+                    _ = try await apiClient.logWeight(weights[i])
                     weights[i].syncStatus = .synced
                 } catch {
                     weights[i].syncStatus = .failed
-                    syncErrors.append("Failed to sync weight: \(error.localizedDescription)")
+                    if let apiError = error as? APIError {
+                        switch apiError {
+                        case .unauthorized:
+                            syncErrors.append("Authentication required to sync weight")
+                        case .serverError(let code):
+                            syncErrors.append("Server error syncing weight (\(code))")
+                        case .decodingError:
+                            syncErrors.append("Data format error syncing weight")
+                        }
+                    } else {
+                        syncErrors.append("Failed to sync weight: \(error.localizedDescription)")
+                    }
                 }
             }
         }

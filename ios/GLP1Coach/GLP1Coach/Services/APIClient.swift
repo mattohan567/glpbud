@@ -22,10 +22,18 @@ enum APIError: Error, LocalizedError {
 final class APIClient: ObservableObject {
     private let base: URL
     private var authToken: String?
-    
+    private let authManager = AuthManager.shared
+
+    // Configured JSON decoder with ISO 8601 date strategy
+    private let jsonDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+
     init() {
         self.base = URL(string: Config.apiBaseURL)!
-        
+
         // In development, use test token if no JWT available
         #if DEBUG
         if let jwt = UserDefaults.standard.string(forKey: "supabase_jwt"), !jwt.isEmpty {
@@ -188,7 +196,21 @@ final class APIClient: ObservableObject {
     }
     
     // MARK: - Network Helpers
-    
+
+    private func handleUnauthorized() async throws {
+        print("🔐 Received 401 - attempting token refresh")
+        await authManager.handleTokenExpiry()
+
+        // Get the refreshed token
+        if let newToken = await authManager.getAccessToken() {
+            self.authToken = newToken
+            print("✅ Token refreshed successfully")
+        } else {
+            print("❌ Token refresh failed - user will be signed out")
+            throw APIError.unauthorized
+        }
+    }
+
     private func get<T: Decodable>(_ path: String) async throws -> T {
         let url = URL(string: base.absoluteString + path)!
         var request = URLRequest(url: url)
@@ -203,9 +225,42 @@ final class APIClient: ObservableObject {
         // Check for HTTP errors
         if let httpResponse = response as? HTTPURLResponse {
             print("📡 GET \(path) - Status: \(httpResponse.statusCode)")
-            
+
             if httpResponse.statusCode == 401 {
-                throw APIError.unauthorized
+                // Try to refresh token and retry once
+                try await handleUnauthorized()
+
+                // Retry the request with new token
+                var retryRequest = URLRequest(url: url)
+                retryRequest.httpMethod = "GET"
+                if let token = authToken {
+                    retryRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                }
+
+                let (retryData, retryResponse) = try await URLSession.shared.data(for: retryRequest)
+
+                if let retryHttpResponse = retryResponse as? HTTPURLResponse {
+                    print("📡 GET \(path) RETRY - Status: \(retryHttpResponse.statusCode)")
+                    if retryHttpResponse.statusCode == 401 {
+                        throw APIError.unauthorized
+                    } else if retryHttpResponse.statusCode >= 400 {
+                        if let errorString = String(data: retryData, encoding: .utf8) {
+                            print("❌ Retry error response: \(errorString)")
+                        }
+                        throw APIError.serverError(retryHttpResponse.statusCode)
+                    }
+                }
+
+                // Use retry data for decoding
+                do {
+                    return try jsonDecoder.decode(T.self, from: retryData)
+                } catch {
+                    print("❌ Decoding error for \(path) (retry): \(error)")
+                    if let responseString = String(data: retryData, encoding: .utf8) {
+                        print("Response was: \(responseString)")
+                    }
+                    throw APIError.decodingError
+                }
             } else if httpResponse.statusCode >= 400 {
                 // Log error response for debugging
                 if let errorString = String(data: data, encoding: .utf8) {
@@ -216,7 +271,7 @@ final class APIClient: ObservableObject {
         }
         
         do {
-            return try JSONDecoder().decode(T.self, from: data)
+            return try jsonDecoder.decode(T.self, from: data)
         } catch {
             print("❌ Decoding error for \(path): \(error)")
             if let responseString = String(data: data, encoding: .utf8) {
@@ -243,9 +298,44 @@ final class APIClient: ObservableObject {
         // Check for HTTP errors
         if let httpResponse = response as? HTTPURLResponse {
             print("📡 POST \(path) - Status: \(httpResponse.statusCode)")
-            
+
             if httpResponse.statusCode == 401 {
-                throw APIError.unauthorized
+                // Try to refresh token and retry once
+                try await handleUnauthorized()
+
+                // Retry the request with new token
+                var retryRequest = URLRequest(url: url)
+                retryRequest.httpMethod = "POST"
+                retryRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                if let token = authToken {
+                    retryRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                }
+                retryRequest.httpBody = try JSONEncoder().encode(body)
+
+                let (retryData, retryResponse) = try await URLSession.shared.data(for: retryRequest)
+
+                if let retryHttpResponse = retryResponse as? HTTPURLResponse {
+                    print("📡 POST \(path) RETRY - Status: \(retryHttpResponse.statusCode)")
+                    if retryHttpResponse.statusCode == 401 {
+                        throw APIError.unauthorized
+                    } else if retryHttpResponse.statusCode >= 400 {
+                        if let errorString = String(data: retryData, encoding: .utf8) {
+                            print("❌ Retry error response: \(errorString)")
+                        }
+                        throw APIError.serverError(retryHttpResponse.statusCode)
+                    }
+                }
+
+                // Use retry data for decoding
+                do {
+                    return try jsonDecoder.decode(T.self, from: retryData)
+                } catch {
+                    print("❌ Decoding error for \(path) (retry): \(error)")
+                    if let responseString = String(data: retryData, encoding: .utf8) {
+                        print("Response was: \(responseString)")
+                    }
+                    throw APIError.decodingError
+                }
             } else if httpResponse.statusCode >= 400 {
                 // Log error response for debugging
                 if let errorString = String(data: data, encoding: .utf8) {
@@ -256,7 +346,7 @@ final class APIClient: ObservableObject {
         }
         
         do {
-            return try JSONDecoder().decode(T.self, from: data)
+            return try jsonDecoder.decode(T.self, from: data)
         } catch {
             print("❌ Decoding error for \(path): \(error)")
             if let responseString = String(data: data, encoding: .utf8) {
@@ -296,7 +386,7 @@ final class APIClient: ObservableObject {
         }
         
         do {
-            return try JSONDecoder().decode(T.self, from: data)
+            return try jsonDecoder.decode(T.self, from: data)
         } catch {
             print("❌ Decoding error for \(path): \(error)")
             if let responseString = String(data: data, encoding: .utf8) {
@@ -333,7 +423,7 @@ final class APIClient: ObservableObject {
         }
         
         do {
-            return try JSONDecoder().decode(T.self, from: data)
+            return try jsonDecoder.decode(T.self, from: data)
         } catch {
             print("❌ Decoding error for \(path): \(error)")
             if let responseString = String(data: data, encoding: .utf8) {

@@ -1,11 +1,11 @@
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
+from typing import Optional, List
 import os
 import json
 import sentry_sdk
 from supabase import create_client, Client
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import uuid
 from dotenv import load_dotenv
 import pathlib
@@ -44,7 +44,8 @@ from .schemas import (
     MedScheduleReq, LogMedEventReq, CoachAskReq,
     IdResp, TodayResp, TrendsResp, CoachResp,
     CoachChatReq, AgenticCoachResp, LoggedAction,
-    HistoryResp, HistoryEntryResp, UpdateMealReq, UpdateExerciseReq, UpdateWeightReq
+    HistoryResp, HistoryEntryResp, UpdateMealReq, UpdateExerciseReq, UpdateWeightReq,
+    WeightPoint, CaloriePoint, StreakInfo, Achievement
 )
 from .llm import claude_call
 try:
@@ -189,20 +190,38 @@ async def get_current_user(authorization: str = Header(None)):
         
         user = MockUser()
         
-        # Ensure test user exists in our users table - use upsert approach directly
+        # Ensure test user exists in our users table
         print(f"🔍 Ensuring test user record exists for {user.email} ({user.id})")
         try:
-            # First try direct upsert which handles both insert and update
-            supabase.table("users").upsert({
-                "id": user.id,
-                "email": user.email,
-                "created_at": datetime.now().isoformat()
-            }, on_conflict="id").execute()
-            print(f"✅ Test user record ensured via upsert")
-        except Exception as upsert_error:
-            print(f"⚠️  Test user upsert failed: {upsert_error}")
-            # Don't delete user data - just log and continue
-            print(f"✅ Continuing with existing test user - no data will be deleted")
+            # First check if user exists
+            existing_user = supabase.table("users").select("id").eq("id", user.id).execute()
+            if not existing_user.data:
+                # User doesn't exist, try to insert
+                supabase.table("users").insert({
+                    "id": user.id,
+                    "email": user.email,
+                    "created_at": datetime.now().isoformat()
+                }).execute()
+                print(f"✅ Test user record created")
+            else:
+                print(f"✅ Test user record already exists")
+        except Exception as user_error:
+            print(f"⚠️  User record operation failed: {user_error}")
+            # Try to clean up any orphaned records and recreate
+            try:
+                print(f"🔄 Attempting to fix user record conflicts")
+                # Delete any conflicting records by email (but not user data)
+                supabase.table("users").delete().eq("email", user.email).neq("id", user.id).execute()
+                # Try insert again
+                supabase.table("users").insert({
+                    "id": user.id,
+                    "email": user.email,
+                    "created_at": datetime.now().isoformat()
+                }).execute()
+                print(f"✅ Test user record recreated successfully")
+            except Exception as cleanup_error:
+                print(f"❌ Failed to fix user record: {cleanup_error}")
+                print(f"⚠️  Continuing anyway - some operations may fail")
         
         return user
     
@@ -223,23 +242,9 @@ async def get_current_user(authorization: str = Header(None)):
             print(f"✅ User record ensured via upsert")
         except Exception as upsert_error:
             print(f"⚠️  Upsert failed: {upsert_error}")
-            # If upsert fails due to email conflict, clean up and try again
-            try:
-                print(f"🧹 Cleaning up conflicting user records for {user.email}")
-                # Delete any user with this email
-                supabase.table("users").delete().eq("email", user.email).execute()
-                # Now insert the correct record
-                supabase.table("users").insert({
-                    "id": user.id,
-                    "email": user.email,
-                    "created_at": datetime.now().isoformat()
-                }).execute()
-                print(f"✅ User record created after cleanup")
-            except Exception as cleanup_error:
-                print(f"❌ Cleanup failed: {cleanup_error}")
-                # Last resort - ignore the error and continue
-                pass
-            # Continue anyway - user validation succeeded, just database issue
+            print(f"✅ Continuing with existing user record - no data will be deleted")
+            # SAFETY: Never delete user data - just log and continue
+            # User validation succeeded, database record issue is not critical
             
         return user
     except Exception as e:
@@ -667,26 +672,228 @@ async def get_today(user=Depends(get_current_user)):
         last_logs=[{"type": "meal", "ts": log["ts"]} for log in last_logs.data or []]
     )
 
+def calculate_streaks(user_id: str) -> List[StreakInfo]:
+    """Calculate current and longest streaks for different activity types"""
+    streaks = []
+
+    try:
+        # Get all activity dates grouped by type
+        activities = {
+            "meals": supabase.table("meals").select("ts").eq("user_id", user_id).order("ts", desc=True).execute(),
+            "exercise": supabase.table("exercises").select("ts").eq("user_id", user_id).order("ts", desc=True).execute(),
+            "weight": supabase.table("weights").select("ts").eq("user_id", user_id).order("ts", desc=True).execute()
+        }
+
+        # Calculate overall logging streak (any activity)
+        all_dates = set()
+        for activity_data in activities.values():
+            for record in activity_data.data or []:
+                all_dates.add(datetime.fromisoformat(record["ts"].replace("Z", "+00:00")).date())
+
+        logging_streak = calculate_consecutive_days(sorted(all_dates, reverse=True))
+        last_activity_dt = None
+        if all_dates:
+            # Convert date to datetime with timezone and normalize microseconds
+            last_date = max(all_dates)
+            last_activity_dt = datetime.combine(last_date, datetime.min.time()).replace(
+                tzinfo=datetime.now().astimezone().tzinfo,
+                microsecond=0
+            )
+
+        streaks.append(StreakInfo(
+            type="logging",
+            current_streak=logging_streak["current"],
+            longest_streak=logging_streak["longest"],
+            last_activity=last_activity_dt
+        ))
+
+        # Calculate individual activity streaks
+        for activity_type, activity_data in activities.items():
+            dates = set()
+            for record in activity_data.data or []:
+                dates.add(datetime.fromisoformat(record["ts"].replace("Z", "+00:00")).date())
+
+            streak = calculate_consecutive_days(sorted(dates, reverse=True))
+            last_activity_dt = None
+            if dates:
+                # Convert date to datetime with timezone and normalize microseconds
+                last_date = max(dates)
+                last_activity_dt = datetime.combine(last_date, datetime.min.time()).replace(
+                    tzinfo=datetime.now().astimezone().tzinfo,
+                    microsecond=0
+                )
+
+            streaks.append(StreakInfo(
+                type=activity_type,
+                current_streak=streak["current"],
+                longest_streak=streak["longest"],
+                last_activity=last_activity_dt
+            ))
+
+    except Exception as e:
+        logger.error(f"Streak calculation error: {e}")
+
+    return streaks
+
+def calculate_consecutive_days(sorted_dates: List[date]) -> dict:
+    """Calculate current and longest streak from sorted dates (newest first)"""
+    if not sorted_dates:
+        return {"current": 0, "longest": 0}
+
+    current_streak = 0
+    longest_streak = 0
+    temp_streak = 0
+
+    # Check if today or yesterday has activity (for current streak)
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+
+    if sorted_dates[0] == today or sorted_dates[0] == yesterday:
+        expected_date = sorted_dates[0]
+        for activity_date in sorted_dates:
+            if activity_date == expected_date:
+                current_streak += 1
+                expected_date -= timedelta(days=1)
+            else:
+                break
+
+    # Calculate longest streak
+    if len(sorted_dates) > 0:
+        temp_streak = 1
+        for i in range(1, len(sorted_dates)):
+            if sorted_dates[i-1] - sorted_dates[i] == timedelta(days=1):
+                temp_streak += 1
+            else:
+                longest_streak = max(longest_streak, temp_streak)
+                temp_streak = 1
+        longest_streak = max(longest_streak, temp_streak)
+
+    return {"current": current_streak, "longest": longest_streak}
+
+def generate_achievements(user_id: str, streaks: List[StreakInfo]) -> List[Achievement]:
+    """Generate achievement badges based on user activity"""
+    achievements = []
+
+    # Streak-based achievements
+    for streak in streaks:
+        if streak.current_streak >= 7:
+            achievements.append(Achievement(
+                id=f"{streak.type}_week_streak",
+                title=f"🔥 Week {streak.type.title()} Streak",
+                description=f"Logged {streak.type} for 7 consecutive days",
+                earned_at=datetime.now(datetime.now().astimezone().tzinfo).replace(microsecond=0),
+                progress=1.0
+            ))
+
+        if streak.current_streak >= 30:
+            achievements.append(Achievement(
+                id=f"{streak.type}_month_streak",
+                title=f"🏆 Month {streak.type.title()} Streak",
+                description=f"Logged {streak.type} for 30 consecutive days",
+                earned_at=datetime.now(datetime.now().astimezone().tzinfo).replace(microsecond=0),
+                progress=1.0
+            ))
+
+    return achievements
+
+def generate_insights(user_id: str, weight_trend: List[WeightPoint], calorie_trend: List[CaloriePoint]) -> List[str]:
+    """Generate smart insights based on user data"""
+    insights = []
+
+    try:
+        # Weight trend insights
+        if len(weight_trend) >= 7:
+            recent_weights = [p.weight_kg for p in weight_trend[-7:]]
+            weight_change = recent_weights[-1] - recent_weights[0]
+
+            if weight_change < -0.5:
+                insights.append(f"📉 Great progress! Down {abs(weight_change):.1f}kg this week")
+            elif weight_change > 0.5:
+                insights.append(f"📈 Weight up {weight_change:.1f}kg this week - consider reviewing your goals")
+            else:
+                insights.append("⚖️ Weight stable this week - consistency is key!")
+
+        # Calorie trend insights
+        if len(calorie_trend) >= 3:
+            avg_deficit = sum(p.net for p in calorie_trend[-3:]) / 3
+            if avg_deficit < -200:
+                insights.append("🎯 Good calorie deficit - staying on track!")
+            elif avg_deficit > 200:
+                insights.append("⚠️ Calorie surplus detected - consider adjusting portions")
+
+        # Activity consistency
+        recent_days_with_data = len([p for p in calorie_trend[-7:] if p.intake > 0])
+        if recent_days_with_data >= 5:
+            insights.append("📊 Excellent logging consistency this week!")
+
+    except Exception as e:
+        logger.error(f"Insight generation error: {e}")
+
+    return insights
+
 @app.get("/trends", response_model=TrendsResp)
 async def get_trends(range: str = "7d", user=Depends(get_current_user)):
-    days = {"7d": 7, "30d": 30, "90d": 90}.get(range, 7)
-    start_date = datetime.now().date() - timedelta(days=days)
-    
-    analytics = supabase.table("analytics_daily").select("*").eq(
-        "user_id", user.id
-    ).gte("day", start_date.isoformat()).execute()
-    
-    weights = supabase.table("weights").select("*").eq(
-        "user_id", user.id
-    ).gte("ts", start_date.isoformat()).order("ts").execute()
-    
-    return TrendsResp(
-        range=range,
-        weight_series=[{"ts": w["ts"], "kg": w["weight_kg"]} for w in weights.data or []],
-        kcal_in_series=[{"date": a["day"], "kcal": a["kcal_in"]} for a in analytics.data or []],
-        kcal_out_series=[{"date": a["day"], "kcal": a["kcal_out"]} for a in analytics.data or []],
-        protein_series=[{"date": a["day"], "g": a["protein_g"]} for a in analytics.data or []]
-    )
+    """Enhanced trends endpoint with streaks and insights"""
+    try:
+        days = {"3d": 3, "7d": 7, "30d": 30, "90d": 90, "all": 365*10}.get(range, 7)  # "all" = 10 years
+        start_date = datetime.now().date() - timedelta(days=days)
+
+        # Get weight data
+        weights_data = supabase.table("weights").select("ts, weight_kg").eq(
+            "user_id", user.id
+        ).gte("ts", start_date.isoformat()).order("ts").execute()
+
+        weight_trend = []
+        for w in weights_data.data or []:
+            # Parse datetime and normalize to remove microseconds for consistent formatting
+            dt = datetime.fromisoformat(w["ts"].replace("Z", "+00:00"))
+            # Remove microseconds to ensure consistent ISO8601 formatting without fractional seconds
+            dt = dt.replace(microsecond=0)
+            weight_trend.append(WeightPoint(
+                date=dt,
+                weight_kg=w["weight_kg"]
+            ))
+
+        # Get calorie data from analytics or calculate from raw data
+        analytics_data = supabase.table("analytics_daily").select("*").eq(
+            "user_id", user.id
+        ).gte("day", start_date.isoformat()).order("day").execute()
+
+        calorie_trend = []
+        for a in analytics_data.data or []:
+            intake = a.get("kcal_in", 0)
+            burned = a.get("kcal_out", 0)
+            # Parse datetime and normalize to remove microseconds for consistent formatting
+            dt = datetime.fromisoformat(a["day"] + "T00:00:00+00:00")
+            # Remove microseconds to ensure consistent ISO8601 formatting without fractional seconds
+            dt = dt.replace(microsecond=0)
+            calorie_trend.append(CaloriePoint(
+                date=dt,
+                intake=intake,
+                burned=burned,
+                net=intake - burned
+            ))
+
+        # Calculate streaks
+        streaks = calculate_streaks(user.id)
+
+        # Generate achievements
+        achievements = generate_achievements(user.id, streaks)
+
+        # Generate insights
+        insights = generate_insights(user.id, weight_trend, calorie_trend)
+
+        return TrendsResp(
+            weight_trend=weight_trend,
+            calorie_trend=calorie_trend,
+            current_streaks=streaks,
+            achievements=achievements,
+            insights=insights
+        )
+
+    except Exception as e:
+        logger.error(f"Trends error: {e}", extra={"user_id": user.id})
+        raise HTTPException(status_code=500, detail="Failed to fetch trends data")
 
 @app.post("/coach/ask", response_model=CoachResp)
 async def coach_ask(req: CoachAskReq, request: Request, user=Depends(get_current_user)):
@@ -855,9 +1062,15 @@ async def agentic_coach_chat(req: CoachChatReq, user=Depends(get_current_user)):
     # Safety guard
     guard_result = safety_guard.check(req.message, user_ctx)
     if not guard_result["allow"]:
+        # Safety guard blocked the request
+        safety_message = guard_result.get("reasoning", "This request cannot be processed for safety reasons.")
         return AgenticCoachResp(
-            message=guard_result["message"],
-            disclaimers=guard_result["disclaimers"]
+            message=safety_message,
+            actions_taken=[],
+            disclaimers=guard_result.get("disclaimers", [
+                "I'm designed to provide general health and wellness information only.",
+                "Always consult with healthcare professionals for medical advice."
+            ])
         )
     
     # Build context for personalized coaching

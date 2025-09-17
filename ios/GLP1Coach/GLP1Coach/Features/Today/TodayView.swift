@@ -105,7 +105,7 @@ struct CalorieSummaryCard: View {
                 }
             }
             
-            ProgressView(value: Double(net), total: Double(target))
+            ProgressView(value: max(0, Double(net)), total: Double(max(1, target)))
                 .tint(net > target ? .red : .blue)
             
             Text("\(abs(remaining)) kcal \(remaining > 0 ? "remaining" : "over")")

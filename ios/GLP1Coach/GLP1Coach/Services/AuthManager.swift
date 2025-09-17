@@ -159,11 +159,52 @@ final class AuthManager: ObservableObject {
     }
     
     func getAccessToken() async -> String? {
+        #if DEBUG
+        // In debug mode, return test token if authenticated via bypass
+        if isAuthenticated && currentUser == nil {
+            return "test-token"
+        }
+        #endif
+
         do {
             let session = try await supabase.auth.session
+            await MainActor.run {
+                UserDefaults.standard.set(session.accessToken, forKey: "supabase_jwt")
+            }
             return session.accessToken
         } catch {
+            print("Error getting access token: \(error)")
+
+            // If we can't get a valid token, sign the user out
+            await MainActor.run {
+                self.currentUser = nil
+                self.isAuthenticated = false
+                UserDefaults.standard.removeObject(forKey: "supabase_jwt")
+                self.dataStore?.clearAllData()
+            }
             return nil
+        }
+    }
+
+    func handleTokenExpiry() async {
+        print("🔄 Handling token expiry - attempting refresh")
+
+        do {
+            let session = try await supabase.auth.session
+            await MainActor.run {
+                self.currentUser = session.user
+                self.isAuthenticated = true
+                UserDefaults.standard.set(session.accessToken, forKey: "supabase_jwt")
+            }
+        } catch {
+            print("❌ Token refresh failed: \(error)")
+            await MainActor.run {
+                self.currentUser = nil
+                self.isAuthenticated = false
+                UserDefaults.standard.removeObject(forKey: "supabase_jwt")
+                self.dataStore?.clearAllData()
+                self.errorMessage = "Session expired. Please sign in again."
+            }
         }
     }
     

@@ -176,41 +176,51 @@ class TextNutrition:
         Parse text meal into items/macros using Claude API.
         """
         # Build the prompt for Claude
-        system_prompt = """You are a nutrition expert analyzing food descriptions. 
+        system_prompt = """You are a nutrition expert analyzing food descriptions.
         Parse the food text into individual items with accurate nutritional information.
-        Return ONLY valid JSON in this exact format with no additional text:
+
+        CRITICAL: Return ONLY valid JSON with no additional text, explanations, or markdown formatting.
+
+        JSON Format:
         {
           "items": [
             {
               "name": "food item name",
               "qty": numeric quantity,
-              "unit": "g" or "ml" or "cup" etc,
-              "kcal": calories as integer,
-              "protein_g": protein in grams as number,
-              "carbs_g": carbs in grams as number,
-              "fat_g": fat in grams as number
+              "unit": "g" or "ml" or "slice" or "cup" etc,
+              "kcal": total calories for the specified quantity,
+              "protein_g": total protein for the specified quantity,
+              "carbs_g": total carbs for the specified quantity,
+              "fat_g": total fat for the specified quantity
             }
           ],
           "confidence": 0.0 to 1.0
         }
-        
-        Use standard portion sizes if not specified. Be accurate with nutritional values.
+
+        QUANTITY UNDERSTANDING - Very Important:
+        - Parse the EXACT quantity mentioned and calculate nutrition for that total amount
+        - "1 slice pizza" = nutrition for 1 slice (~270 kcal)
+        - "5 slices pizza" = nutrition for 5 slices (~1350 kcal total)
+        - "half slice pizza" = nutrition for 0.5 slice (~135 kcal)
+        - "2 cups rice" = nutrition for 2 cups total
+
         Examples:
-        - "chicken breast" -> 100g serving
-        - "apple" -> 1 medium (182g)
-        - "2 eggs" -> 2 large eggs (100g total)
-        """
+        Input: "1 slice pizza" -> {"name": "pizza", "qty": 1, "unit": "slice", "kcal": 270, ...}
+        Input: "5 slices pizza" -> {"name": "pizza", "qty": 5, "unit": "slice", "kcal": 1350, ...}
+        Input: "2 eggs" -> {"name": "eggs", "qty": 2, "unit": "large", "kcal": 140, ...}
+
+        Return ONLY the JSON object, no other text."""
         
         user_message = f"Parse this meal: {text}"
         if hints:
             user_message += f"\nAdditional context: {hints}"
         
         try:
-            # Call Claude API
+            # Call Claude API with Sonnet for better instruction following
             response = claude_call(
                 messages=[{"role": "user", "content": user_message}],
                 system=system_prompt,
-                model="claude-3-5-haiku-20241022",
+                model="claude-3-5-sonnet-20241022",  # Upgraded from Haiku for better quantity understanding
                 metadata={"tool": "text_nutrition_parse", "text": text[:100]}
             )
             
@@ -219,35 +229,86 @@ class TextNutrition:
             
             # Try to parse JSON
             try:
-                # Clean up response - remove any markdown formatting
-                if "```json" in response_text:
-                    response_text = response_text.split("```json")[1].split("```")[0]
-                elif "```" in response_text:
-                    response_text = response_text.split("```")[1].split("```")[0]
-                    
-                data = json.loads(response_text)
-                
-                # Convert to MealItem objects
+                # Debug logging to see what Claude actually returned
+                print(f"🔍 Claude raw response length: {len(response_text)} chars")
+                print(f"🔍 Claude response preview: {response_text[:200]}...")
+
+                # Enhanced JSON extraction logic
+                cleaned_text = response_text.strip()
+
+                # Method 1: Look for markdown JSON blocks
+                if "```json" in cleaned_text:
+                    start = cleaned_text.find("```json") + 7
+                    end = cleaned_text.find("```", start)
+                    if end > start:
+                        cleaned_text = cleaned_text[start:end].strip()
+                        print("📝 Extracted from ```json block")
+                elif "```" in cleaned_text:
+                    start = cleaned_text.find("```") + 3
+                    end = cleaned_text.find("```", start)
+                    if end > start:
+                        cleaned_text = cleaned_text[start:end].strip()
+                        print("📝 Extracted from ``` block")
+
+                # Method 2: Look for first { to last } for pure JSON
+                if cleaned_text.startswith('{') and cleaned_text.count('{') > 0:
+                    first_brace = cleaned_text.find('{')
+                    last_brace = cleaned_text.rfind('}')
+                    if last_brace > first_brace:
+                        potential_json = cleaned_text[first_brace:last_brace + 1]
+                        try:
+                            # Test if this is valid JSON
+                            test_data = json.loads(potential_json)
+                            cleaned_text = potential_json
+                            print("📝 Extracted JSON from braces")
+                        except json.JSONDecodeError:
+                            pass  # Keep original cleaned_text
+
+                print(f"🔍 Cleaned JSON to parse: {cleaned_text[:100]}...")
+                data = json.loads(cleaned_text)
+
+                # Trust Claude Sonnet to handle quantities correctly
+                print(f"🧠 Claude Sonnet parsed {len(data.get('items', []))} food items with quantities")
+
+                # Convert to MealItem objects (no manual scaling needed)
                 items = []
                 for item_data in data.get("items", []):
+                    name = item_data.get("name", "unknown")
+                    qty = float(item_data.get("qty", 100))
+                    unit = item_data.get("unit", "g")
+                    kcal = int(item_data.get("kcal", 0))
+                    protein_g = float(item_data.get("protein_g", 0))
+                    carbs_g = float(item_data.get("carbs_g", 0))
+                    fat_g = float(item_data.get("fat_g", 0))
+
+                    print(f"🍕 {name}: {qty} {unit}, {kcal} kcal")
+
                     items.append(
                         MealItem(
-                            name=item_data.get("name", "unknown"),
-                            qty=float(item_data.get("qty", 100)),
-                            unit=item_data.get("unit", "g"),
-                            kcal=int(item_data.get("kcal", 0)),
-                            protein_g=float(item_data.get("protein_g", 0)),
-                            carbs_g=float(item_data.get("carbs_g", 0)),
-                            fat_g=float(item_data.get("fat_g", 0)),
-                            fdc_id=None  # Would need USDA API integration for this
+                            name=name,
+                            qty=qty,
+                            unit=unit,
+                            kcal=kcal,
+                            protein_g=protein_g,
+                            carbs_g=carbs_g,
+                            fat_g=fat_g,
+                            fdc_id=None
                         )
                     )
-                
+
                 confidence = float(data.get("confidence", 0.7))
                 
             except (json.JSONDecodeError, KeyError, ValueError) as e:
+                # Enhanced error logging
+                print(f"❌ Failed to parse Claude response: {e}")
+                print(f"❌ Error type: {type(e).__name__}")
+                print(f"❌ Raw response (first 500 chars): {response_text[:500]}")
+                if hasattr(e, 'pos'):
+                    error_pos = getattr(e, 'pos', 0)
+                    print(f"❌ Error at position {error_pos}: '{response_text[max(0, error_pos-20):error_pos+20]}'")
+
                 # Fallback if parsing fails
-                print(f"Failed to parse Claude response: {e}")
+                print(f"🔄 Using fallback parser for text: '{text}'")
                 items = self._fallback_parse(text)
                 confidence = 0.5
                 
@@ -424,24 +485,74 @@ class TextNutrition:
     
     def _detect_portion_size(self, text: str) -> dict:
         """Detect portion size indicators in text"""
+        import re
+
         multipliers = {'general': 1.0}
-        
-        # Size indicators
+
+        # Debug logging to trace quantity detection
+        print(f"🔢 Analyzing text for quantities: '{text}'")
+
+        # Size indicators (should not override quantity-based multipliers)
+        size_multiplier = 1.0
         if any(word in text for word in ['large', 'big', 'huge', 'jumbo', 'xl']):
-            multipliers['general'] = 1.4
+            size_multiplier = 1.4
+            print(f"📏 Size modifier detected: large (×{size_multiplier})")
         elif any(word in text for word in ['small', 'little', 'mini', 'tiny', 'xs']):
-            multipliers['general'] = 0.7
+            size_multiplier = 0.7
+            print(f"📏 Size modifier detected: small (×{size_multiplier})")
         elif any(word in text for word in ['medium', 'regular', 'normal']):
-            multipliers['general'] = 1.0
-        
-        # Quantity indicators
-        if '2 ' in text or 'two ' in text or 'double' in text:
-            multipliers['general'] = 2.0
-        elif '3 ' in text or 'three ' in text or 'triple' in text:
-            multipliers['general'] = 3.0
-        elif 'half' in text or '0.5' in text:
-            multipliers['general'] = 0.5
-            
+            size_multiplier = 1.0
+            print(f"📏 Size modifier detected: medium (×{size_multiplier})")
+
+        # Enhanced quantity detection using regex and word mapping
+        quantity_multiplier = 1.0
+
+        # Word-to-number mapping
+        word_to_num = {
+            'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+            'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14, 'fifteen': 15,
+            'sixteen': 16, 'seventeen': 17, 'eighteen': 18, 'nineteen': 19, 'twenty': 20,
+            'half': 0.5, 'quarter': 0.25, 'double': 2, 'triple': 3
+        }
+
+        # Check for word-based quantities
+        for word, num in word_to_num.items():
+            if word in text.lower():
+                quantity_multiplier = num
+                print(f"🔢 Word quantity detected: '{word}' = ×{quantity_multiplier}")
+                break
+
+        # Check for digit-based quantities (1-20)
+        # Look for patterns like "5 slices", "10 pieces", etc.
+        digit_match = re.search(r'\b(\d+(?:\.\d+)?)\s*(?:slice|piece|serving|portion|cup|item)', text.lower())
+        if digit_match:
+            quantity_multiplier = float(digit_match.group(1))
+            print(f"🔢 Digit quantity detected: {quantity_multiplier}")
+        elif re.search(r'\b(\d+(?:\.\d+)?)\s', text):
+            # Fallback: any number followed by space
+            number_match = re.search(r'\b(\d+(?:\.\d+)?)\s', text)
+            if number_match:
+                potential_qty = float(number_match.group(1))
+                # Only use if it's a reasonable quantity (1-20)
+                if 0.1 <= potential_qty <= 20:
+                    quantity_multiplier = potential_qty
+                    print(f"🔢 Fallback quantity detected: {quantity_multiplier}")
+
+        # Fractional quantities
+        if 'half' in text or '0.5' in text:
+            quantity_multiplier = 0.5
+            print(f"🔢 Fractional quantity detected: half = ×{quantity_multiplier}")
+        elif '1.5' in text or 'one and a half' in text:
+            quantity_multiplier = 1.5
+            print(f"🔢 Fractional quantity detected: 1.5 = ×{quantity_multiplier}")
+
+        # Combine size and quantity multipliers
+        final_multiplier = quantity_multiplier * size_multiplier
+        multipliers['general'] = final_multiplier
+
+        print(f"🎯 Final multiplier: {quantity_multiplier} (qty) × {size_multiplier} (size) = {final_multiplier}")
+
         return multipliers
     
     def _food_matches(self, food_name: str, text: str) -> bool:

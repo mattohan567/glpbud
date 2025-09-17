@@ -44,28 +44,6 @@ struct TodayResp: Codable {
     let last_logs: [[String: String]]
 }
 
-struct WeightDataPoint: Codable {
-    let ts: String
-    let kg: Double
-}
-
-struct MacroDataPoint: Codable {
-    let date: String
-    let kcal: Int
-}
-
-struct ProteinDataPoint: Codable {
-    let date: String
-    let g: Double
-}
-
-struct TrendsResp: Codable {
-    let range: String
-    let weight_series: [WeightDataPoint]
-    let kcal_in_series: [MacroDataPoint]
-    let kcal_out_series: [MacroDataPoint]
-    let protein_series: [ProteinDataPoint]
-}
 
 struct NextDoseResp: Codable {
     let next_dose_ts: String?
@@ -228,6 +206,63 @@ struct UpdateExerciseReq: Codable {
 struct UpdateWeightReq: Codable {
     let weight_kg: Double
     let method: String
+}
+
+// MARK: - Trends and Streaks Models
+
+struct WeightPoint: Codable {
+    let date: Date
+    let weight_kg: Double
+}
+
+struct CaloriePoint: Codable {
+    let date: Date
+    let intake: Int
+    let burned: Int
+    let net: Int
+}
+
+struct StreakInfo: Codable {
+    let type: String
+    let current_streak: Int
+    let longest_streak: Int
+    let last_activity: Date?
+
+    var displayName: String {
+        switch type {
+        case "logging": return "Daily Logging"
+        case "meals": return "Meal Tracking"
+        case "exercise": return "Exercise"
+        case "weight": return "Weight Tracking"
+        default: return type.capitalized
+        }
+    }
+
+    var icon: String {
+        switch type {
+        case "logging": return "calendar"
+        case "meals": return "fork.knife"
+        case "exercise": return "figure.walk"
+        case "weight": return "scalemass"
+        default: return "star"
+        }
+    }
+}
+
+struct Achievement: Codable, Identifiable {
+    let id: String
+    let title: String
+    let description: String
+    let earned_at: Date?
+    let progress: Double
+}
+
+struct TrendsResp: Codable {
+    let weight_trend: [WeightPoint]
+    let calorie_trend: [CaloriePoint]
+    let current_streaks: [StreakInfo]
+    let achievements: [Achievement]
+    let insights: [String]
 }
 
 // Helper for dynamic JSON decoding

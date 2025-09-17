@@ -69,7 +69,7 @@ struct HistoryView: View {
                                 }
                             }
                             .pickerStyle(.menu)
-                            .onChange(of: sortOrder) {
+                            .onChange(of: sortOrder) { _, _ in
                                 sortEntries()
                             }
                             
@@ -243,8 +243,12 @@ struct HistoryEntryRow: View {
             return "\(items.count) items • \(totalKcal) kcal"
             
         case .exercise:
-            let duration = entry.details["duration_min"] as? Double ?? 0
-            let kcal = entry.details["est_kcal"] as? Int
+            // Handle both Int and Double for duration
+            let duration = (entry.details["duration_min"] as? Double) ??
+                          Double(entry.details["duration_min"] as? Int ?? 0)
+            // Handle both Int and Double for calories
+            let kcal = (entry.details["est_kcal"] as? Int) ??
+                      (entry.details["est_kcal"] as? Double).map { Int($0) }
             if let kcal = kcal {
                 return "\(Int(duration))min • \(kcal) kcal burned"
             } else {
@@ -252,7 +256,9 @@ struct HistoryEntryRow: View {
             }
             
         case .weight:
-            let weight = entry.details["weight_kg"] as? Double ?? 0
+            // Handle both Int and Double for weight_kg
+            let weight = (entry.details["weight_kg"] as? Double) ??
+                        Double(entry.details["weight_kg"] as? Int ?? 0)
             return "\(String(format: "%.1f", weight)) kg"
             
         case .medication:
@@ -318,58 +324,407 @@ struct EditEntrySheet: View {
 struct EditMealView: View {
     let entry: HistoryEntryResp
     let onSave: () async -> Void
+    @EnvironmentObject private var apiClient: APIClient
+    @State private var items: [MealItemDTO] = []
     @State private var notes: String = ""
-    
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
     var body: some View {
-        VStack {
-            Text("Meal editing coming soon")
-                .foregroundColor(.secondary)
-            
-            Button("Save Changes") {
-                Task { await onSave() }
+        Form {
+            Section("Meal Items") {
+                ForEach(items.indices, id: \.self) { index in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(items[index].name)
+                                .font(.headline)
+                            Spacer()
+                            Button(role: .destructive) {
+                                items.remove(at: index)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .foregroundColor(.red)
+                            }
+                        }
+
+                        HStack {
+                            Label("\(items[index].kcal) kcal", systemImage: "flame")
+                            Spacer()
+                            Text("\(Int(items[index].protein_g))g protein")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
             }
-            .buttonStyle(.bordered)
+
+            Section("Notes") {
+                TextField("Add notes (optional)", text: $notes, axis: .vertical)
+                    .lineLimit(3...6)
+            }
+
+            Section("Totals") {
+                HStack {
+                    Label("Total Calories", systemImage: "flame.fill")
+                    Spacer()
+                    Text("\(totalCalories) kcal")
+                        .fontWeight(.semibold)
+                }
+                HStack {
+                    Text("Protein")
+                    Spacer()
+                    Text("\(Int(totalProtein))g")
+                }
+                HStack {
+                    Text("Carbs")
+                    Spacer()
+                    Text("\(Int(totalCarbs))g")
+                }
+                HStack {
+                    Text("Fat")
+                    Spacer()
+                    Text("\(Int(totalFat))g")
+                }
+            }
         }
-        .padding()
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Save") {
+                    Task { await saveChanges() }
+                }
+                .disabled(items.isEmpty || isLoading)
+            }
+        }
+        .onAppear {
+            loadMealData()
+        }
+        .alert("Error", isPresented: .constant(errorMessage != nil)) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private func loadMealData() {
+        if let mealItems = entry.details["items"] as? [[String: Any]] {
+            items = mealItems.compactMap { dict in
+                guard let name = dict["name"] as? String,
+                      let kcal = dict["kcal"] as? Int else { return nil }
+
+                let qty = (dict["qty"] as? Double) ?? 1
+                let unit = (dict["unit"] as? String) ?? "serving"
+                let protein = (dict["protein_g"] as? Double) ?? 0
+                let carbs = (dict["carbs_g"] as? Double) ?? 0
+                let fat = (dict["fat_g"] as? Double) ?? 0
+
+                return MealItemDTO(
+                    name: name,
+                    qty: qty,
+                    unit: unit,
+                    kcal: kcal,
+                    protein_g: protein,
+                    carbs_g: carbs,
+                    fat_g: fat,
+                    fdc_id: nil
+                )
+            }
+        }
+        notes = (entry.details["notes"] as? String) ?? ""
+    }
+
+    private func saveChanges() async {
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            _ = try await apiClient.updateMeal(
+                entryId: entry.id,
+                items: items,
+                notes: notes.isEmpty ? nil : notes
+            )
+            await onSave()
+        } catch {
+            errorMessage = "Failed to update meal: \(error.localizedDescription)"
+        }
+    }
+
+    private var totalCalories: Int {
+        items.reduce(0) { $0 + $1.kcal }
+    }
+
+    private var totalProtein: Double {
+        items.reduce(0) { $0 + $1.protein_g }
+    }
+
+    private var totalCarbs: Double {
+        items.reduce(0) { $0 + $1.carbs_g }
+    }
+
+    private var totalFat: Double {
+        items.reduce(0) { $0 + $1.fat_g }
     }
 }
 
 struct EditExerciseView: View {
     let entry: HistoryEntryResp
     let onSave: () async -> Void
+    @EnvironmentObject private var apiClient: APIClient
     @State private var exerciseType: String = ""
-    @State private var duration: Double = 0
-    
+    @State private var duration: Double = 30
+    @State private var intensity: String = "moderate"
+    @State private var calories: Int = 0
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    let intensityOptions = ["light", "moderate", "vigorous"]
+
     var body: some View {
-        VStack {
-            Text("Exercise editing coming soon")
-                .foregroundColor(.secondary)
-            
-            Button("Save Changes") {
-                Task { await onSave() }
+        Form {
+            Section("Exercise Details") {
+                TextField("Exercise Type", text: $exerciseType)
+                    .autocapitalization(.words)
+
+                HStack {
+                    Text("Duration")
+                    Spacer()
+                    Text("\(Int(duration)) minutes")
+                        .foregroundColor(.secondary)
+                }
+                Slider(value: $duration, in: 5...180, step: 5) {
+                    Text("Duration")
+                }
+                .onChange(of: duration) { _ in
+                    updateEstimatedCalories()
+                }
             }
-            .buttonStyle(.bordered)
+
+            Section("Intensity") {
+                Picker("Intensity", selection: $intensity) {
+                    ForEach(intensityOptions, id: \.self) { option in
+                        Text(option.capitalized).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: intensity) { _ in
+                    updateEstimatedCalories()
+                }
+            }
+
+            Section("Calories Burned") {
+                HStack {
+                    Text("Estimated Calories")
+                    Spacer()
+                    TextField("Calories", value: $calories, format: .number)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 80)
+                    Text("kcal")
+                        .foregroundColor(.secondary)
+                }
+            }
         }
-        .padding()
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Save") {
+                    Task { await saveChanges() }
+                }
+                .disabled(exerciseType.isEmpty || isLoading)
+            }
+        }
+        .onAppear {
+            loadExerciseData()
+        }
+        .alert("Error", isPresented: .constant(errorMessage != nil)) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private func loadExerciseData() {
+        exerciseType = (entry.details["type"] as? String) ?? ""
+        duration = (entry.details["duration_min"] as? Double) ??
+                  Double(entry.details["duration_min"] as? Int ?? 30)
+        intensity = (entry.details["intensity"] as? String) ?? "moderate"
+        calories = (entry.details["est_kcal"] as? Int) ?? 0
+    }
+
+    private func updateEstimatedCalories() {
+        // Simple calorie estimation based on duration and intensity
+        let baseRate: Double
+        switch intensity {
+        case "light": baseRate = 3.5
+        case "moderate": baseRate = 7.0
+        case "vigorous": baseRate = 10.5
+        default: baseRate = 7.0
+        }
+        calories = Int(duration * baseRate)
+    }
+
+    private func saveChanges() async {
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            _ = try await apiClient.updateExercise(
+                entryId: entry.id,
+                type: exerciseType,
+                durationMin: duration,
+                intensity: intensity,
+                estKcal: calories > 0 ? calories : nil
+            )
+            await onSave()
+        } catch {
+            errorMessage = "Failed to update exercise: \(error.localizedDescription)"
+        }
     }
 }
 
 struct EditWeightView: View {
-    let entry: HistoryEntryResp  
+    let entry: HistoryEntryResp
     let onSave: () async -> Void
-    @State private var weight: Double = 0
-    
+    @EnvironmentObject private var apiClient: APIClient
+    @State private var weight: Double = 70
+    @State private var method: String = "scale"
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    let methodOptions = ["scale", "manual", "estimate"]
+
     var body: some View {
-        VStack {
-            Text("Weight editing coming soon")
-                .foregroundColor(.secondary)
-            
-            Button("Save Changes") {
-                Task { await onSave() }
+        Form {
+            Section("Weight Measurement") {
+                HStack {
+                    Text("Weight")
+                    Spacer()
+                    TextField("Weight", value: $weight, format: .number.precision(.fractionLength(1)))
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 100)
+                    Text("kg")
+                        .foregroundColor(.secondary)
+                }
+
+                // Visual weight slider for easier adjustment
+                VStack {
+                    Slider(value: $weight, in: 30...200, step: 0.1)
+                    HStack {
+                        Text("30 kg")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text(String(format: "%.1f kg", weight))
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                        Spacer()
+                        Text("200 kg")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
             }
-            .buttonStyle(.bordered)
+
+            Section("Method") {
+                Picker("Measurement Method", selection: $method) {
+                    Text("Scale").tag("scale")
+                    Text("Manual").tag("manual")
+                    Text("Estimate").tag("estimate")
+                }
+                .pickerStyle(.segmented)
+
+                Text(methodDescription)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section("BMI") {
+                HStack {
+                    Text("BMI")
+                    Spacer()
+                    Text(String(format: "%.1f", bmi))
+                        .foregroundColor(bmiColor)
+                    Text("(\(bmiCategory))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
         }
-        .padding()
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button("Save") {
+                    Task { await saveChanges() }
+                }
+                .disabled(weight <= 0 || isLoading)
+            }
+        }
+        .onAppear {
+            loadWeightData()
+        }
+        .alert("Error", isPresented: .constant(errorMessage != nil)) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private func loadWeightData() {
+        weight = (entry.details["weight_kg"] as? Double) ??
+                Double(entry.details["weight_kg"] as? Int ?? 70)
+        method = (entry.details["method"] as? String) ?? "scale"
+    }
+
+    private func saveChanges() async {
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            _ = try await apiClient.updateWeight(
+                entryId: entry.id,
+                weightKg: weight,
+                method: method
+            )
+            await onSave()
+        } catch {
+            errorMessage = "Failed to update weight: \(error.localizedDescription)"
+        }
+    }
+
+    private var methodDescription: String {
+        switch method {
+        case "scale": return "Measured using a calibrated scale"
+        case "manual": return "Manually entered measurement"
+        case "estimate": return "Estimated weight"
+        default: return ""
+        }
+    }
+
+    // Assuming average height of 1.7m for BMI calculation
+    // In a real app, this would come from user profile
+    private var bmi: Double {
+        let heightM = 1.7
+        return weight / (heightM * heightM)
+    }
+
+    private var bmiCategory: String {
+        switch bmi {
+        case ..<18.5: return "Underweight"
+        case 18.5..<25: return "Normal"
+        case 25..<30: return "Overweight"
+        default: return "Obese"
+        }
+    }
+
+    private var bmiColor: Color {
+        switch bmi {
+        case 18.5..<25: return .green
+        case 25..<30: return .orange
+        case 30...: return .red
+        default: return .blue
+        }
     }
 }
 
