@@ -21,10 +21,21 @@ struct HistoryView: View {
             }
         }
     }
-    
+
     var body: some View {
-        NavigationView {
+        ZStack {
+            AppBackground()
+                .ignoresSafeArea(.all)
+
             VStack {
+                // Hero Title
+                Text("History")
+                    .font(.heroTitle)
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+
                 if isLoading {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -129,6 +140,7 @@ struct HistoryView: View {
                 }
             }
         }
+        .tapToDismissKeyboard()
     }
     
     private func loadHistory() async {
@@ -520,6 +532,7 @@ struct EditExerciseView: View {
                         .keyboardType(.numberPad)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 80)
+                        .keyboardToolbar()
                     Text("kcal")
                         .foregroundColor(.secondary)
                 }
@@ -604,6 +617,7 @@ struct EditWeightView: View {
                         .keyboardType(.decimalPad)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 100)
+                        .keyboardToolbar()
                     Text("kg")
                         .foregroundColor(.secondary)
                 }

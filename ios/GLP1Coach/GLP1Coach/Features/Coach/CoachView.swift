@@ -10,10 +10,21 @@ struct CoachView: View {
     @State private var showingSettings = false
     
     var body: some View {
-        NavigationView {
+        ZStack {
+            AppBackground()
+                .ignoresSafeArea(.all)
+
             VStack {
+                // Hero Title
+                Text("Coach")
+                    .font(.heroTitle)
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+
                 ScrollViewReader { proxy in
-                    ScrollView {
+                    ScrollView(showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 12) {
                             ForEach(messages) { message in
                                 MessageBubble(message: message)
@@ -47,13 +58,15 @@ struct CoachView: View {
                         .onSubmit {
                             sendQuestion()
                         }
-                    
+
                     Button(action: sendQuestion) {
                         Image(systemName: "paperplane.fill")
                     }
                     .disabled(question.isEmpty || isLoading)
                 }
                 .padding()
+                .background(.ultraThinMaterial)
+                .padding(.bottom, 0) // Remove extra bottom padding since MainTabView handles spacing
             }
             .navigationTitle("Coach")
         }
@@ -65,6 +78,7 @@ struct CoachView: View {
                 ))
             }
         }
+        .tapToDismissKeyboard()
     }
     
     private func sendQuestion() {

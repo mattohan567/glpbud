@@ -18,9 +18,9 @@ struct Config {
         return ProcessInfo.processInfo.environment["SUPABASE_ANON_KEY"] ?? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh1Z3F2bW1kZnV3b3VuaGFscHhkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTcyNzU2ODYsImV4cCI6MjA3Mjg1MTY4Nn0.BrEesh_FXt02A5Ebx-FoJy-rMoVmOLgjVDdBNTNrfAE"
     }()
     
-    // API Configuration  
+    // API Configuration
     #if DEBUG
-    static let apiBaseURL = "http://localhost:8000"  // Local development
+    static let apiBaseURL = "http://192.168.86.29:8000"  // Local development - Mac's IP for iPhone testing
     #else
     static let apiBaseURL = "https://glp1coach-api.fly.dev"  // Production
     #endif

@@ -39,7 +39,8 @@ env_path = pathlib.Path(__file__).parent.parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
 from .schemas import (
-    ParseMealTextReq, ParseMealImageReq, MealParse,
+    ParseMealTextReq, ParseMealImageReq, ParseMealAudioReq, MealParse,
+    ParseExerciseTextReq, ParseExerciseAudioReq, ExerciseParse,
     LogMealReq, LogExerciseReq, LogWeightReq,
     MedScheduleReq, LogMedEventReq, CoachAskReq,
     IdResp, TodayResp, TrendsResp, CoachResp,
@@ -47,7 +48,7 @@ from .schemas import (
     HistoryResp, HistoryEntryResp, UpdateMealReq, UpdateExerciseReq, UpdateWeightReq,
     WeightPoint, CaloriePoint, StreakInfo, Achievement
 )
-from .llm import claude_call
+from .llm import claude_call, log_tool_run
 try:
     # Try local development import first
     from tools import vision_nutrition, text_nutrition, exercise_estimator, glp1_adherence, insights, safety_guard
@@ -347,6 +348,221 @@ async def parse_meal_image(req: ParseMealImageReq, request: Request, user=Depend
     except Exception as e:
         log_error(logger, e, {"user_id": user.id})
         raise HTTPException(status_code=500, detail="Failed to parse meal image")
+
+@app.post("/parse/meal-audio", response_model=MealParse)
+async def parse_meal_audio(req: ParseMealAudioReq, request: Request, user=Depends(get_current_user)):
+    """Parse meal from audio recording (supports Romanian!)."""
+    # Apply rate limiting for expensive parse operations
+    check_rate_limit(request, user.id, 'parse')
+
+    try:
+        # Import whisper module
+        from .whisper import transcribe_meal_audio
+
+        # Sanitize hints if provided
+        clean_hints = sanitize_text(req.hints) if req.hints else None
+
+        logger.info(
+            f"Parsing meal audio for user {user.id}",
+            extra={
+                "user_id": user.id,
+                "audio_size": len(req.audio_data) if req.audio_data else 0,
+                "has_hints": bool(clean_hints)
+            }
+        )
+
+        # Transcribe audio to text
+        transcribed_text = transcribe_meal_audio(req.audio_data, clean_hints)
+
+        if not transcribed_text:
+            raise HTTPException(status_code=400, detail="Failed to transcribe audio")
+
+        logger.info(f"Audio transcribed: {transcribed_text[:100]}...")
+
+        # Parse the transcribed text as a meal
+        result = text_nutrition.parse(transcribed_text, clean_hints)
+
+        # Log event for analytics
+        supabase.table("event_bus").insert({
+            "user_id": user.id,
+            "type": "parse_meal_audio",
+            "payload": {
+                "transcribed_text": transcribed_text[:200],  # First 200 chars for privacy
+                "confidence": result.confidence,
+                "items_found": len(result.items)
+            }
+        }).execute()
+
+        return result
+
+    except ValidationError as e:
+        logger.warning(f"Meal audio validation failed: {e.message}", extra={"user_id": user.id})
+        raise HTTPException(status_code=422, detail={"error": e.error_code, "message": e.message, "field": e.field})
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
+    except Exception as e:
+        log_error(logger, e, {"user_id": user.id})
+        raise HTTPException(status_code=500, detail="Failed to parse meal audio")
+
+@app.post("/transcribe/audio")
+async def transcribe_audio_simple(req: ParseMealAudioReq, request: Request, user=Depends(get_current_user)):
+    """Simple Whisper transcription without meal parsing."""
+    # Apply rate limiting for expensive operations
+    check_rate_limit(request, user.id, 'parse')
+
+    try:
+        # Import whisper module
+        from .whisper import transcribe_audio
+
+        logger.info(
+            f"Transcribing audio for user {user.id}",
+            extra={
+                "user_id": user.id,
+                "audio_size": len(req.audio_data) if req.audio_data else 0,
+            }
+        )
+
+        # Simple transcription to text
+        transcribed_text = transcribe_audio(req.audio_data)
+
+        if not transcribed_text:
+            raise HTTPException(status_code=400, detail="Failed to transcribe audio")
+
+        logger.info(f"Audio transcribed: {transcribed_text[:100]}...")
+
+        return {"transcription": transcribed_text}
+
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
+    except Exception as e:
+        log_error(logger, e, {"user_id": user.id})
+        raise HTTPException(status_code=500, detail="Failed to transcribe audio")
+
+@app.post("/parse/exercise-text", response_model=ExerciseParse)
+async def parse_exercise_text(req: ParseExerciseTextReq, request: Request, user=Depends(get_current_user)):
+    """Parse exercise from text description."""
+    # Apply rate limiting for expensive parse operations
+    check_rate_limit(request, user.id, 'parse')
+
+    try:
+        # Import exercise module
+        try:
+            from tools.exercise import exercise_estimator
+        except ImportError:
+            from backend.tools.exercise import exercise_estimator
+
+        # Sanitize input text
+        clean_text = sanitize_text(req.text)
+
+        logger.info(
+            f"Parsing exercise text for user {user.id}",
+            extra={
+                "user_id": user.id,
+                "text_length": len(clean_text),
+                "has_hints": bool(req.hints)
+            }
+        )
+
+        # Get user weight for calorie calculations
+        user_weight = 70  # Default weight
+        if hasattr(user, 'profile') and user.profile:
+            user_weight = user.profile.get("weight_kg", 70)
+
+        # Parse exercise text
+        result = exercise_estimator.parse_exercise_text(clean_text, user_weight)
+
+        if not result or not result.get('exercises'):
+            raise HTTPException(status_code=400, detail="Failed to parse exercise description")
+
+        logger.info(f"Exercise parsed: {len(result['exercises'])} exercises, {result['total_kcal']} kcal")
+
+        # Log tool usage for observability
+        log_tool_run(
+            tool_name="exercise_text_parser",
+            input_data={"text": clean_text[:100]},
+            output_data={"exercises": len(result['exercises']), "total_kcal": result['total_kcal'], "confidence": result.get('confidence', 0)},
+            model="claude-3-5-sonnet-20241022",
+            latency_ms=0,  # Will be calculated separately
+            success=True,
+            user_id=user.id
+        )
+
+        return ExerciseParse(**result)
+
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
+    except Exception as e:
+        log_error(logger, e, {"user_id": user.id})
+        raise HTTPException(status_code=500, detail="Failed to parse exercise text")
+
+@app.post("/parse/exercise-audio", response_model=ExerciseParse)
+async def parse_exercise_audio(req: ParseExerciseAudioReq, request: Request, user=Depends(get_current_user)):
+    """Parse exercise from audio recording."""
+    # Apply rate limiting for expensive operations
+    check_rate_limit(request, user.id, 'parse')
+
+    try:
+        # Import modules
+        from .whisper import transcribe_audio
+        try:
+            from tools.exercise import exercise_estimator
+        except ImportError:
+            from backend.tools.exercise import exercise_estimator
+
+        logger.info(
+            f"Parsing exercise audio for user {user.id}",
+            extra={
+                "user_id": user.id,
+                "audio_size": len(req.audio_data) if req.audio_data else 0,
+                "has_hints": bool(req.hints)
+            }
+        )
+
+        # Transcribe audio to text
+        transcribed_text = transcribe_audio(req.audio_data)
+
+        if not transcribed_text:
+            raise HTTPException(status_code=400, detail="Failed to transcribe audio")
+
+        logger.info(f"Audio transcribed: {transcribed_text[:100]}...")
+
+        # Combine transcription with hints
+        combined_text = transcribed_text
+        if req.hints:
+            clean_hints = sanitize_text(req.hints)
+            combined_text = f"{transcribed_text}. Additional info: {clean_hints}"
+
+        # Get user weight for calorie calculations
+        user_weight = 70  # Default weight
+        if hasattr(user, 'profile') and user.profile:
+            user_weight = user.profile.get("weight_kg", 70)
+
+        # Parse exercise text
+        result = exercise_estimator.parse_exercise_text(combined_text, user_weight)
+
+        if not result or not result.get('exercises'):
+            raise HTTPException(status_code=400, detail="Failed to parse exercise from audio")
+
+        logger.info(f"Exercise parsed from audio: {len(result['exercises'])} exercises, {result['total_kcal']} kcal")
+
+        # Log tool usage for observability
+        log_tool_run(
+            tool_name="exercise_audio_parser",
+            input_data={"transcription": transcribed_text[:100]},
+            output_data={"exercises": len(result['exercises']), "total_kcal": result['total_kcal'], "confidence": result.get('confidence', 0)},
+            model="claude-3-5-sonnet-20241022",
+            latency_ms=0,  # Will be calculated separately
+            success=True,
+            user_id=user.id
+        )
+
+        return ExerciseParse(**result)
+
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
+    except Exception as e:
+        log_error(logger, e, {"user_id": user.id})
+        raise HTTPException(status_code=500, detail="Failed to parse exercise audio")
 
 @app.post("/log/meal", response_model=IdResp)
 async def log_meal(req: LogMealReq, user=Depends(get_current_user)):

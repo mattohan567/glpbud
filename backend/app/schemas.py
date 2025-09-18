@@ -35,6 +35,11 @@ class ParseMealImageReq(BaseModel):
     user_id: Optional[str] = None
     hints: Optional[str] = None
 
+class ParseMealAudioReq(BaseModel):
+    audio_data: str  # base64 encoded audio data
+    user_id: Optional[str] = None
+    hints: Optional[str] = None
+
 class LogMealReq(BaseModel):
     datetime: datetime
     source: Literal["image","text","manual"]
@@ -53,6 +58,35 @@ class LogWeightReq(BaseModel):
     datetime: datetime
     weight_kg: float
     method: Optional[Literal["scale","manual","healthkit"]] = "manual"
+
+class ExerciseItem(BaseModel):
+    name: str
+    category: str  # cardio, strength, flexibility, sport
+    duration_min: Optional[float] = None
+    sets: Optional[int] = None
+    reps: Optional[int] = None
+    weight_kg: Optional[float] = None
+    intensity: str  # low, moderate, high
+    equipment: Optional[str] = None
+    est_kcal: int
+
+class ExerciseParse(BaseModel):
+    exercises: List[ExerciseItem]
+    total_duration_min: float
+    total_kcal: int
+    confidence: float = Field(..., ge=0, le=1)
+    questions: Optional[List[str]] = None
+    low_confidence: bool = False
+
+class ParseExerciseTextReq(BaseModel):
+    text: str
+    user_id: Optional[str] = None
+    hints: Optional[str] = None
+
+class ParseExerciseAudioReq(BaseModel):
+    audio_data: str  # base64 encoded audio data
+    user_id: Optional[str] = None
+    hints: Optional[str] = None
 
 class MedScheduleReq(BaseModel):
     drug_name: Literal["semaglutide","tirzepatide","liraglutide","other"]

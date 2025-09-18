@@ -48,38 +48,54 @@ struct GLP1CoachApp: App {
 }
 
 struct MainTabView: View {
+    @State private var selectedTab = 0
+
     var body: some View {
-        TabView {
-            TodayView()
-                .tabItem {
-                    Label("Today", systemImage: "calendar")
+        ZStack(alignment: .bottom) {
+            // Content based on selected tab
+            Group {
+                switch selectedTab {
+                case 0:
+                    NavigationView {
+                        TodayView()
+                    }
+                    .padding(.bottom, 100) // Space for floating tab bar
+                case 1:
+                    NavigationView {
+                        RecordView()
+                    }
+                    .padding(.bottom, 100)
+                case 2:
+                    NavigationView {
+                        CoachView()
+                    }
+                    .padding(.bottom, 100)
+                case 3:
+                    NavigationView {
+                        HistoryView()
+                    }
+                    .padding(.bottom, 100)
+                case 4:
+                    NavigationView {
+                        TrendsView()
+                    }
+                    .padding(.bottom, 100)
+                case 5:
+                    NavigationView {
+                        ProfileView()
+                    }
+                    .padding(.bottom, 100)
+                default:
+                    NavigationView {
+                        TodayView()
+                    }
+                    .padding(.bottom, 100)
                 }
-            
-            RecordView()
-                .tabItem {
-                    Label("Record", systemImage: "plus.circle")
-                }
-            
-            CoachView()
-                .tabItem {
-                    Label("Coach", systemImage: "message")
-                }
-            
-            HistoryView()
-                .tabItem {
-                    Label("History", systemImage: "clock")
-                }
-            
-            TrendsView()
-                .tabItem {
-                    Label("Trends", systemImage: "chart.line.uptrend.xyaxis")
-                }
-            
-            ProfileView()
-                .tabItem {
-                    Label("Profile", systemImage: "person")
-                }
+            }
+
+            // Custom floating tab bar
+            FloatingTabBar(selection: $selectedTab)
         }
-        .accentColor(.blue)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 }

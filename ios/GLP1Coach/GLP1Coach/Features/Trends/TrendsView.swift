@@ -4,49 +4,60 @@ import Charts
 struct TrendsView: View {
     @EnvironmentObject private var apiClient: APIClient
     @State private var selectedTab = 0
-    @State private var selectedRange = "7d"
+    @State private var selectedRange = 1 // Index for "7d"
     @State private var trendsData: TrendsResp?
     @State private var isLoading = false
     @State private var errorMessage: String?
 
-    let ranges = [
-        ("3d", "3 Days"),
-        ("7d", "Week"),
-        ("30d", "Month"),
-        ("90d", "3 Months"),
-        ("all", "All Time")
-    ]
+    private let rangeOptions = ["3d", "7d", "30d", "90d", "All"]
+    private let rangeValues = ["3d", "7d", "30d", "90d", "all"]
 
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                // Tab Selector
-                Picker("Tab", selection: $selectedTab) {
-                    Text("Charts").tag(0)
-                    Text("Streaks").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .padding()
+        ZStack {
+            AppBackground()
+                .ignoresSafeArea(.all)
 
-                if isLoading {
-                    ProgressView("Loading trends...")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    if selectedTab == 0 {
-                        // Charts Tab
-                        ChartsTabView(
-                            trendsData: trendsData,
-                            selectedRange: $selectedRange,
-                            ranges: ranges,
-                            onRangeChange: { await loadTrends() }
-                        )
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: Theme.spacing.lg) {
+                    // Hero Title
+                    Text("Trends")
+                        .font(.heroTitle)
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    // Tab Selector
+                    GlassCard {
+                        PillSegment(items: ["Charts", "Streaks"], selection: $selectedTab)
+                    }
+
+                    if isLoading {
+                        GlassCard {
+                            VStack(spacing: Theme.spacing.md) {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                Text("Loading trends...")
+                                    .foregroundStyle(Theme.textSecondary)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 200)
+                        }
                     } else {
-                        // Streaks Tab
-                        StreaksTabView(trendsData: trendsData)
+                        if selectedTab == 0 {
+                            // Charts Tab
+                            ChartsContent(
+                                trendsData: trendsData,
+                                selectedRange: $selectedRange,
+                                rangeOptions: rangeOptions,
+                                rangeValues: rangeValues,
+                                onRangeChange: { await loadTrends() }
+                            )
+                        } else {
+                            // Streaks Tab
+                            StreaksContent(trendsData: trendsData)
+                        }
                     }
                 }
+                .padding()
             }
-            .navigationTitle("Trends")
             .refreshable {
                 await loadTrends()
             }
@@ -59,6 +70,7 @@ struct TrendsView: View {
                 Text(errorMessage ?? "")
             }
         }
+        .navigationBarHidden(true)
     }
 
     private func loadTrends() async {
@@ -66,7 +78,8 @@ struct TrendsView: View {
         errorMessage = nil
 
         do {
-            let data = try await apiClient.getTrends(range: selectedRange)
+            let range = rangeValues[selectedRange]
+            let data = try await apiClient.getTrends(range: range)
             await MainActor.run {
                 trendsData = data
                 isLoading = false
@@ -80,71 +93,196 @@ struct TrendsView: View {
     }
 }
 
-struct ChartsTabView: View {
+struct ChartsContent: View {
     let trendsData: TrendsResp?
-    @Binding var selectedRange: String
-    let ranges: [(String, String)]
+    @Binding var selectedRange: Int
+    let rangeOptions: [String]
+    let rangeValues: [String]
     let onRangeChange: () async -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                // Range Selector
-                Picker("Range", selection: $selectedRange) {
-                    ForEach(ranges, id: \.0) { range in
-                        Text(range.1).tag(range.0)
+        VStack(spacing: Theme.spacing.lg) {
+            // Range Selector
+            GlassCard {
+                PillSegment(items: rangeOptions, selection: $selectedRange)
+                    .onChange(of: selectedRange) { _, _ in
+                        Task { await onRangeChange() }
+                    }
+            }
+
+            if let data = trendsData {
+                // Weight Chart
+                if !data.weight_trend.isEmpty {
+                    GlassCard {
+                        VStack(spacing: Theme.spacing.md) {
+                            SectionHeader("Weight Trend", showChevron: true)
+
+                            // Chart container with better styling
+                            VStack(spacing: 0) {
+                                WeightChartView(weightPoints: data.weight_trend, range: rangeValues[selectedRange])
+                                    .frame(height: 200)
+                            }
+                            .background(Color.white.opacity(0.05))
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius.md, style: .continuous))
+                        }
                     }
                 }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                .onChange(of: selectedRange) { _, _ in
-                    Task { await onRangeChange() }
+
+                // Calorie Chart
+                if !data.calorie_trend.isEmpty {
+                    GlassCard {
+                        VStack(spacing: Theme.spacing.md) {
+                            SectionHeader("Calorie Trend", showChevron: true)
+
+                            // Chart container with better styling
+                            VStack(spacing: 0) {
+                                CalorieChartView(caloriePoints: data.calorie_trend, range: rangeValues[selectedRange])
+                                    .frame(height: 200)
+                            }
+                            .background(Color.white.opacity(0.05))
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius.md, style: .continuous))
+                        }
+                    }
                 }
 
-                if let data = trendsData {
-                    // Weight Chart
-                    WeightChartView(weightPoints: data.weight_trend, range: selectedRange)
-
-                    // Calorie Chart
-                    CalorieChartView(caloriePoints: data.calorie_trend, range: selectedRange)
-
-                    // Insights
-                    if !data.insights.isEmpty {
-                        InsightsCard(insights: data.insights)
+                // AI Insights
+                if !data.insights.isEmpty {
+                    GlassCard {
+                        VStack(alignment: .leading, spacing: Theme.spacing.md) {
+                            SectionHeader("AI Insights")
+                            VStack(alignment: .leading, spacing: Theme.spacing.sm) {
+                                ForEach(data.insights.indices, id: \.self) { index in
+                                    InsightChip(text: data.insights[index])
+                                }
+                            }
+                        }
                     }
-                } else {
-                    Text("No chart data available")
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 200)
+                }
+            } else {
+                GlassCard {
+                    EmptyStateView(
+                        icon: "chart.line.uptrend.xyaxis",
+                        title: "No Data Yet",
+                        subtitle: "Start logging meals and weight to see trends"
+                    )
                 }
             }
-            .padding(.vertical)
         }
     }
 }
 
-struct StreaksTabView: View {
+struct StreaksContent: View {
     let trendsData: TrendsResp?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                if let data = trendsData {
-                    // Streaks Section
-                    StreaksCard(streaks: data.current_streaks)
-
-                    // Achievements
-                    if !data.achievements.isEmpty {
-                        AchievementsCard(achievements: data.achievements)
+        VStack(spacing: Theme.spacing.lg) {
+            if let data = trendsData {
+                // Current Streaks
+                if !data.current_streaks.isEmpty {
+                    GlassCard {
+                        VStack(spacing: Theme.spacing.md) {
+                            SectionHeader("Current Streaks")
+                            StreaksView(streaks: data.current_streaks)
+                        }
                     }
-                } else {
-                    Text("No streaks data available")
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 200)
+                }
+
+                // Achievements
+                if !data.achievements.isEmpty {
+                    GlassCard {
+                        VStack(spacing: Theme.spacing.md) {
+                            SectionHeader("Achievements")
+                            AchievementsView(achievements: data.achievements)
+                        }
+                    }
+                }
+            } else {
+                GlassCard {
+                    EmptyStateView(
+                        icon: "star.fill",
+                        title: "No Streaks Yet",
+                        subtitle: "Keep logging consistently to build streaks"
+                    )
                 }
             }
-            .padding(.vertical)
         }
+    }
+}
+
+// Helper components for Trends
+struct StreaksView: View {
+    let streaks: [StreakInfo]
+
+    var body: some View {
+        VStack(spacing: Theme.spacing.md) {
+            if streaks.isEmpty {
+                Text("No active streaks")
+                    .foregroundStyle(Theme.textSecondary)
+                    .font(.caption)
+            } else {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: Theme.spacing.md) {
+                    ForEach(streaks.prefix(4), id: \.type) { streak in
+                        StreakItem(
+                            icon: streak.icon,
+                            label: streak.displayName,
+                            days: streak.current_streak
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct StreakItem: View {
+    let icon: String
+    let label: String
+    let days: Int
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundStyle(Theme.warn)
+            Text("\(days) days")
+                .font(.headline)
+                .foregroundStyle(Theme.textPrimary)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(Theme.textTertiary)
+        }
+    }
+}
+
+struct AchievementsView: View {
+    let achievements: [Achievement]
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: Theme.spacing.md) {
+            ForEach(achievements.indices, id: \.self) { index in
+                AchievementBadge(achievement: achievements[index])
+            }
+        }
+    }
+}
+
+struct AchievementBadge: View {
+    let achievement: Achievement
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: "star.fill")
+                .font(.title2)
+                .foregroundStyle(achievement.earned_at != nil ? Theme.accent : .white.opacity(0.3))
+            Text(achievement.title)
+                .font(.caption2)
+                .foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding()
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Theme.cornerRadius.md))
+        .opacity(achievement.earned_at != nil ? 1.0 : 0.5)
     }
 }
 

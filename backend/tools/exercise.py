@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import json
 try:
     from app.llm import claude_call
@@ -6,6 +6,163 @@ except ImportError:
     from backend.app.llm import claude_call
 
 class ExerciseEstimator:
+    def parse_exercise_text(self, text: str, weight_kg: float = 70) -> Dict[str, Any]:
+        """
+        Parse natural language exercise descriptions into structured data.
+        """
+        system_prompt = """You are a fitness coach analyzing workout descriptions.
+        Parse the exercise description into structured data.
+
+        Return ONLY valid JSON in this exact format with no additional text:
+        {
+          "exercises": [
+            {
+              "name": "specific exercise name",
+              "category": "cardio" or "strength" or "flexibility" or "sport",
+              "duration_min": numeric minutes or null,
+              "sets": numeric sets or null,
+              "reps": numeric reps or null,
+              "weight_kg": numeric weight or null,
+              "intensity": "low" or "moderate" or "high",
+              "equipment": "equipment name" or "none",
+              "est_kcal": estimated calories for this exercise
+            }
+          ],
+          "total_duration_min": total workout duration,
+          "total_kcal": total estimated calories,
+          "confidence": 0.0 to 1.0
+        }
+
+        Exercise categories:
+        - cardio: running, cycling, swimming, walking, dancing
+        - strength: weight lifting, bodyweight exercises, resistance training
+        - flexibility: yoga, stretching, pilates
+        - sport: tennis, basketball, soccer, etc.
+
+        Use standard MET values to estimate calories:
+        - Light cardio (walking): 3-4 METs
+        - Moderate cardio (jogging): 6-8 METs
+        - Vigorous cardio (running): 9-12 METs
+        - Strength training: 5-8 METs
+        - Yoga/stretching: 2-4 METs
+
+        Calories = METs × weight_kg × duration_hours
+        """
+
+        user_message = f"Exercise description: {text}\nUser weight: {weight_kg} kg"
+
+        try:
+            # Call Claude API
+            response = claude_call(
+                messages=[{"role": "user", "content": user_message}],
+                system=system_prompt,
+                model="claude-3-5-sonnet-20241022",  # Use Sonnet for better parsing
+                metadata={"tool": "exercise_parser", "text": text[:100]}
+            )
+
+            # Extract JSON from response
+            response_text = response.content[0].text if response.content else "{}"
+
+            # Parse JSON
+            try:
+                if "```json" in response_text:
+                    response_text = response_text.split("```json")[1].split("```")[0]
+                elif "```" in response_text:
+                    response_text = response_text.split("```")[1].split("```")[0]
+
+                data = json.loads(response_text)
+
+                # Validate and return structured data
+                exercises = data.get("exercises", [])
+                total_duration = data.get("total_duration_min", 0)
+                total_kcal = data.get("total_kcal", 0)
+                confidence = data.get("confidence", 0.7)
+
+                return {
+                    "exercises": exercises,
+                    "total_duration_min": total_duration,
+                    "total_kcal": total_kcal,
+                    "confidence": confidence,
+                    "questions": [],
+                    "low_confidence": confidence < 0.6
+                }
+
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                print(f"Failed to parse Claude response: {e}")
+                return self._fallback_parse(text, weight_kg)
+
+        except Exception as e:
+            print(f"Claude API call failed: {e}")
+            return self._fallback_parse(text, weight_kg)
+
+    def _fallback_parse(self, text: str, weight_kg: float = 70) -> Dict[str, Any]:
+        """Fallback exercise parsing when Claude is unavailable"""
+        # Extract basic exercise information using keyword matching
+        text_lower = text.lower()
+
+        # Common exercise patterns
+        exercises = []
+        total_duration = 30  # Default duration
+        total_kcal = 0
+
+        # Extract duration if mentioned
+        import re
+        duration_match = re.search(r'(\d+)\s*(min|minute|minutes|hour|hours)', text_lower)
+        if duration_match:
+            duration_value = int(duration_match.group(1))
+            unit = duration_match.group(2)
+            if 'hour' in unit:
+                total_duration = duration_value * 60
+            else:
+                total_duration = duration_value
+
+        # Exercise type detection
+        exercise_types = {
+            'running': {'category': 'cardio', 'met': 8.0},
+            'jogging': {'category': 'cardio', 'met': 6.0},
+            'walking': {'category': 'cardio', 'met': 3.5},
+            'cycling': {'category': 'cardio', 'met': 6.5},
+            'swimming': {'category': 'cardio', 'met': 7.0},
+            'yoga': {'category': 'flexibility', 'met': 3.0},
+            'strength': {'category': 'strength', 'met': 6.0},
+            'weight': {'category': 'strength', 'met': 6.0},
+            'cardio': {'category': 'cardio', 'met': 6.0},
+            'elliptical': {'category': 'cardio', 'met': 6.5}
+        }
+
+        detected_exercise = "general activity"
+        exercise_info = {'category': 'cardio', 'met': 4.0}
+
+        for exercise, info in exercise_types.items():
+            if exercise in text_lower:
+                detected_exercise = exercise
+                exercise_info = info
+                break
+
+        # Calculate calories
+        kcal = int(exercise_info['met'] * weight_kg * (total_duration / 60))
+
+        exercises.append({
+            'name': detected_exercise,
+            'category': exercise_info['category'],
+            'duration_min': total_duration,
+            'sets': None,
+            'reps': None,
+            'weight_kg': None,
+            'intensity': 'moderate',
+            'equipment': 'none',
+            'est_kcal': kcal
+        })
+
+        return {
+            'exercises': exercises,
+            'total_duration_min': total_duration,
+            'total_kcal': kcal,
+            'confidence': 0.5,  # Lower confidence for fallback
+            'questions': [],
+            'low_confidence': True
+        }
+
     def estimate(self, text: str, duration_min: float, intensity: Optional[str] = None, weight_kg: float = 70) -> Dict[str, Any]:
         """
         Estimate calories using Claude for exercise recognition and MET values.

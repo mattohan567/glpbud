@@ -28,6 +28,27 @@ struct MealParseDTO: Codable {
     let low_confidence: Bool
 }
 
+struct ExerciseItemDTO: Codable {
+    let name: String
+    let category: String
+    let duration_min: Double?
+    let sets: Int?
+    let reps: Int?
+    let weight_kg: Double?
+    let intensity: String
+    let equipment: String?
+    let est_kcal: Int
+}
+
+struct ExerciseParseDTO: Codable {
+    let exercises: [ExerciseItemDTO]
+    let total_duration_min: Double
+    let total_kcal: Int
+    let confidence: Double
+    let questions: [String]?
+    let low_confidence: Bool
+}
+
 struct IdResp: Codable {
     let ok: Bool
     let id: String

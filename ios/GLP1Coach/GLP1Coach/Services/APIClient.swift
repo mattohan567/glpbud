@@ -69,8 +69,46 @@ final class APIClient: ObservableObject {
         }
         return try await post("/parse/meal-image", Body(image_url: imageUrl, hints: hints))
     }
-    
-    
+
+    func parseMealAudio(audioData: Data, hints: String? = nil) async throws -> MealParseDTO {
+        struct Body: Codable {
+            let audio_data: String  // base64 encoded audio
+            let hints: String?
+        }
+        let base64Audio = audioData.base64EncodedString()
+        return try await post("/parse/meal-audio", Body(audio_data: base64Audio, hints: hints))
+    }
+
+    func transcribeAudio(audioData: Data) async throws -> String {
+        struct Body: Codable {
+            let audio_data: String  // base64 encoded audio
+        }
+        struct Response: Codable {
+            let transcription: String
+        }
+        let base64Audio = audioData.base64EncodedString()
+        let response: Response = try await post("/transcribe/audio", Body(audio_data: base64Audio))
+        return response.transcription
+    }
+
+    func parseExerciseText(text: String, hints: String? = nil) async throws -> ExerciseParseDTO {
+        struct Body: Codable {
+            let text: String
+            let hints: String?
+        }
+        return try await post("/parse/exercise-text", Body(text: text, hints: hints))
+    }
+
+    func parseExerciseAudio(audioData: Data, hints: String? = nil) async throws -> ExerciseParseDTO {
+        struct Body: Codable {
+            let audio_data: String  // base64 encoded audio
+            let hints: String?
+        }
+        let base64Audio = audioData.base64EncodedString()
+        return try await post("/parse/exercise-audio", Body(audio_data: base64Audio, hints: hints))
+    }
+
+
     // MARK: - Logging Endpoints
     
     func logMeal(meal: Meal, parse: MealParseDTO) async throws -> IdResp {

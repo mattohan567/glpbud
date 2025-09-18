@@ -9,90 +9,122 @@ struct AuthView: View {
     @State private var isLoading = false
     @State private var showingAlert = false
     @State private var alertMessage = ""
-    
+
     var body: some View {
-        NavigationView {
-            ScrollView {
-                VStack(spacing: 24) {
-                    // Logo
-                    VStack(spacing: 8) {
+        ZStack {
+            AppBackground()
+                .ignoresSafeArea(.all)
+
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: Theme.spacing.xxl) {
+                    // Hero Section
+                    VStack(spacing: Theme.spacing.md) {
                         Image(systemName: "heart.text.square.fill")
-                            .font(.system(size: 60))
-                            .foregroundColor(.blue)
-                        
+                            .font(.system(size: 72))
+                            .foregroundStyle(.white)
+                            .shadow(radius: 20, y: 10)
+
                         Text("GLP-1 Coach")
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
-                        
-                        Text("Your personal weight management assistant")
+                            .font(.heroTitle)
+                            .foregroundStyle(.white)
+
+                        Text("Track meals, weight & habits with AI assist")
                             .font(.subheadline)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.white.opacity(0.8))
                             .multilineTextAlignment(.center)
                     }
-                    .padding(.top, 40)
+                    .padding(.top, 60)
                     .padding(.bottom, 20)
-                    
-                    // Form
-                    VStack(spacing: 16) {
-                        TextField("Email", text: $email)
-                            .textFieldStyle(.roundedBorder)
-                            .keyboardType(.emailAddress)
-                            .autocapitalization(.none)
-                        
-                        SecureField("Password", text: $password)
-                            .textFieldStyle(.roundedBorder)
-                        
-                        if isSignUp {
-                            SecureField("Confirm Password", text: $confirmPassword)
-                                .textFieldStyle(.roundedBorder)
-                        }
-                    }
-                    .padding(.horizontal)
-                    
-                    // Buttons
-                    VStack(spacing: 12) {
-                        Button(action: handleAuth) {
-                            if isLoading {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            } else {
-                                Text(isSignUp ? "Create Account" : "Sign In")
-                                    .fontWeight(.semibold)
+
+                    // Auth Form
+                    GlassCard {
+                        VStack(spacing: Theme.spacing.lg) {
+                            // Form Fields
+                            VStack(spacing: Theme.spacing.md) {
+                                TextField("Email", text: $email)
+                                    .textContentType(.emailAddress)
+                                    .keyboardType(.emailAddress)
+                                    .autocapitalization(.none)
+                                    .textFieldStyle(.roundedBorder)
+
+                                SecureField("Password", text: $password)
+                                    .textContentType(.password)
+                                    .textFieldStyle(.roundedBorder)
+
+                                if isSignUp {
+                                    SecureField("Confirm Password", text: $confirmPassword)
+                                        .textContentType(.password)
+                                        .textFieldStyle(.roundedBorder)
+                                        .transition(.opacity.combined(with: .move(edge: .top)))
+                                }
                             }
+
+                            // Primary Action Button
+                            PrimaryButton(
+                                title: isSignUp ? "Create Account" : "Sign In",
+                                isLoading: isLoading
+                            ) {
+                                handleAuth()
+                            }
+                            .disabled(!isFormValid)
+
+                            // Divider
+                            HStack {
+                                Rectangle()
+                                    .frame(height: 1)
+                                    .opacity(0.2)
+                                Text("or")
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.7))
+                                Rectangle()
+                                    .frame(height: 1)
+                                    .opacity(0.2)
+                            }
+
+                            // Social Login Buttons
+                            VStack(spacing: Theme.spacing.sm) {
+                                SocialButton(icon: "applelogo", title: "Continue with Apple") {
+                                    // Handle Apple sign in
+                                }
+
+                                SocialButton(icon: "globe", title: "Continue with Google") {
+                                    // Handle Google sign in
+                                }
+                            }
+
+                            // Toggle Sign Up / Sign In
+                            Button(action: {
+                                withAnimation(Theme.springAnimation) {
+                                    isSignUp.toggle()
+                                }
+                            }) {
+                                Text(isSignUp ? "Already have an account? Sign In" : "Don't have an account? Sign Up")
+                                    .font(.footnote.weight(.medium))
+                                    .foregroundStyle(.white.opacity(0.8))
+                            }
+
+                            #if DEBUG
+                            Button(action: useTestAccount) {
+                                Text("Use Test Account")
+                                    .font(.footnote)
+                                    .foregroundStyle(.white.opacity(0.5))
+                            }
+                            #endif
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                        .disabled(isLoading || !isFormValid)
-                        
-                        Button(action: { isSignUp.toggle() }) {
-                            Text(isSignUp ? "Already have an account? Sign In" : "Don't have an account? Sign Up")
-                                .font(.footnote)
-                                .foregroundColor(.blue)
-                        }
-                        
-                        #if DEBUG
-                        Button(action: useTestAccount) {
-                            Text("Use Test Account")
-                                .font(.footnote)
-                                .foregroundColor(.gray)
-                        }
-                        #endif
                     }
                     .padding(.horizontal)
-                    
-                    Spacer(minLength: 40)
+
+                    Spacer(minLength: 60)
                 }
             }
-            .navigationBarHidden(true)
         }
+        .navigationBarHidden(true)
         .alert("Authentication", isPresented: $showingAlert) {
             Button("OK", role: .cancel) { }
         } message: {
             Text(alertMessage)
         }
+        .tapToDismissKeyboard()
     }
     
     private var isFormValid: Bool {

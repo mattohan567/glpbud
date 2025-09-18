@@ -7,63 +7,76 @@ struct ProfileView: View {
     @State private var showingSignOutAlert = false
     
     var body: some View {
-        NavigationView {
-            Form {
-                Section("Account") {
-                    if let user = authManager.currentUser {
+        ZStack {
+            AppBackground()
+                .ignoresSafeArea(.all)
+
+            VStack {
+                // Hero Title
+                Text("Profile")
+                    .font(.heroTitle)
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+
+                Form {
+                    Section("Account") {
+                        if let user = authManager.currentUser {
+                            HStack {
+                                Text("Email")
+                                Spacer()
+                                Text(user.email ?? "")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+
+                    Section("Daily Targets") {
                         HStack {
-                            Text("Email")
+                            Text("Calories")
                             Spacer()
-                            Text(user.email ?? "")
+                            Text("\(calorieTarget) kcal")
+                                .foregroundColor(.secondary)
+                        }
+
+                        HStack {
+                            Text("Protein")
+                            Spacer()
+                            Text("\(proteinTarget) g")
                                 .foregroundColor(.secondary)
                         }
                     }
-                }
-                
-                Section("Daily Targets") {
-                    HStack {
-                        Text("Calories")
-                        Spacer()
-                        Text("\(calorieTarget) kcal")
-                            .foregroundColor(.secondary)
+
+                    Section("About") {
+                        HStack {
+                            Text("Version")
+                            Spacer()
+                            Text(Config.appVersion)
+                                .foregroundColor(.secondary)
+                        }
                     }
-                    
-                    HStack {
-                        Text("Protein")
-                        Spacer()
-                        Text("\(proteinTarget) g")
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                Section("About") {
-                    HStack {
-                        Text("Version")
-                        Spacer()
-                        Text(Config.appVersion)
-                            .foregroundColor(.secondary)
+
+                    Section {
+                        Button(action: { showingSignOutAlert = true }) {
+                            Text("Sign Out")
+                                .foregroundColor(.red)
+                                .frame(maxWidth: .infinity)
+                        }
                     }
                 }
-                
-                Section {
-                    Button(action: { showingSignOutAlert = true }) {
-                        Text("Sign Out")
-                            .foregroundColor(.red)
-                            .frame(maxWidth: .infinity)
+                .alert("Sign Out", isPresented: $showingSignOutAlert) {
+                    Button("Cancel", role: .cancel) { }
+                    Button("Sign Out", role: .destructive) {
+                        Task {
+                            try? await authManager.signOut()
+                        }
                     }
+                } message: {
+                    Text("Are you sure you want to sign out?")
                 }
-            }
-            .navigationTitle("Profile")
-            .alert("Sign Out", isPresented: $showingSignOutAlert) {
-                Button("Cancel", role: .cancel) { }
-                Button("Sign Out", role: .destructive) {
-                    Task {
-                        try? await authManager.signOut()
-                    }
-                }
-            } message: {
-                Text("Are you sure you want to sign out?")
             }
         }
+        .navigationBarHidden(true)
     }
 }

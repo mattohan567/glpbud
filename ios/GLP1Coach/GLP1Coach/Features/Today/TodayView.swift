@@ -4,38 +4,101 @@ struct TodayView: View {
     @EnvironmentObject var store: DataStore
     @EnvironmentObject var apiClient: APIClient
     @State private var isLoading = false
-    
+    @State private var quickActionSelection = 1
+
     var body: some View {
-        NavigationView {
-            ScrollView {
-                VStack(spacing: 20) {
-                    // Calorie Summary Card
-                    CalorieSummaryCard(
-                        caloriesIn: store.todayCaloriesIn,
-                        caloriesOut: store.todayCaloriesOut,
-                        target: Config.defaultCalorieTarget
-                    )
-                    
-                    // Macros Card
-                    MacrosCard(
-                        protein: store.todayProtein,
-                        carbs: store.todayCarbs,
-                        fat: store.todayFat
-                    )
-                    
+        ZStack {
+            AppBackground()
+                .ignoresSafeArea(.all)
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: Theme.spacing.lg) {
+                    // Hero Title
+                    Text("Today")
+                        .font(.heroTitle)
+                        .foregroundStyle(Theme.textPrimary)
+                        .padding(.top, 8)
+
+                    // Calorie & Macros Progress
+                    GlassCard {
+                        HStack(spacing: 18) {
+                            ProgressRing(
+                                progress: CGFloat(store.todayCaloriesIn - store.todayCaloriesOut) / CGFloat(max(1, Config.defaultCalorieTarget)),
+                                label: "Calories",
+                                value: "\(store.todayCaloriesIn - store.todayCaloriesOut)"
+                            )
+
+                            VStack(spacing: 12) {
+                                ProgressDot("Protein", CGFloat(store.todayProtein) / 120, color: Theme.gradientTop)
+                                ProgressDot("Carbs", CGFloat(store.todayCarbs) / 150, color: Theme.warn)
+                                ProgressDot("Fat", CGFloat(store.todayFat) / 50, color: Theme.accent)
+                            }
+                        }
+                    }
+
+                    // Quick Actions
+                    GlassCard {
+                        VStack(spacing: Theme.spacing.md) {
+                            SectionHeader("Quick Actions")
+
+                            HStack(spacing: 12) {
+                                QuickAction(title: "Log Meal", icon: "fork.knife") {
+                                    // Navigation to Record tab will be handled in MainTabView
+                                }
+                                QuickAction(title: "Log Weight", icon: "scalemass") {
+                                    // Navigation to Record tab
+                                }
+                                QuickAction(title: "Exercise", icon: "figure.run") {
+                                    // Navigation to Record tab
+                                }
+                            }
+                        }
+                    }
+
                     // Recent Meals
                     if !store.todayMeals.isEmpty {
-                        RecentMealsCard(meals: store.todayMeals)
+                        GlassCard {
+                            VStack(spacing: Theme.spacing.md) {
+                                SectionHeader("Recent Meals", showChevron: true)
+
+                                VStack(alignment: .leading, spacing: 10) {
+                                    ForEach(store.todayMeals.prefix(3)) { meal in
+                                        MealRow(
+                                            title: meal.items.first?.name ?? "Meal",
+                                            kcal: meal.totals.kcal,
+                                            time: meal.timestamp.formatted(date: .omitted, time: .shortened)
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
-                    
-                    // Weight Card
+
+                    // Latest Weight
                     if let weightKg = store.latestWeight {
-                        LatestWeightCard(weightKg: weightKg)
+                        GlassCard {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Latest Weight")
+                                        .font(.caption)
+                                        .foregroundStyle(Theme.textSecondary)
+                                    Text(String(format: "%.1f kg", weightKg))
+                                        .font(.title.bold())
+                                        .foregroundStyle(Theme.textPrimary)
+                                }
+                                Spacer()
+                                // You could add trend indicator here
+                                Text("↓ 0.5 kg")
+                                    .font(.subheadline)
+                                    .foregroundStyle(Theme.accent)
+                            }
+                        }
                     }
+
+                    Spacer(minLength: 40)
                 }
                 .padding()
             }
-            .navigationTitle("Today")
             .refreshable {
                 await loadTodayStats()
             }
@@ -48,199 +111,10 @@ struct TodayView: View {
                 }
             }
         }
+        .navigationBarHidden(true)
     }
     
     private func loadTodayStats() async {
         await store.refreshTodayStats(apiClient: apiClient)
-    }
-}
-
-struct CalorieSummaryCard: View {
-    let caloriesIn: Int
-    let caloriesOut: Int
-    let target: Int
-    
-    var net: Int { caloriesIn - caloriesOut }
-    var remaining: Int { target - net }
-    
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("Calorie Summary")
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            
-            HStack(spacing: 20) {
-                VStack {
-                    Text("\(caloriesIn)")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    Text("Intake")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                Image(systemName: "minus")
-                    .foregroundColor(.secondary)
-                
-                VStack {
-                    Text("\(caloriesOut)")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    Text("Burned")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                Image(systemName: "equal")
-                    .foregroundColor(.secondary)
-                
-                VStack {
-                    Text("\(net)")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(net > target ? .red : .green)
-                    Text("Net")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            ProgressView(value: max(0, Double(net)), total: Double(max(1, target)))
-                .tint(net > target ? .red : .blue)
-            
-            Text("\(abs(remaining)) kcal \(remaining > 0 ? "remaining" : "over")")
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(radius: 2)
-    }
-}
-
-struct MacrosCard: View {
-    let protein: Double
-    let carbs: Double
-    let fat: Double
-    
-    var body: some View {
-        VStack(spacing: 12) {
-            Text("Macros")
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            
-            HStack(spacing: 20) {
-                MacroItem(name: "Protein", value: protein, unit: "g", color: .blue)
-                MacroItem(name: "Carbs", value: carbs, unit: "g", color: .orange)
-                MacroItem(name: "Fat", value: fat, unit: "g", color: .green)
-            }
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(radius: 2)
-    }
-}
-
-struct MacroItem: View {
-    let name: String
-    let value: Double
-    let unit: String
-    let color: Color
-    
-    var body: some View {
-        VStack(spacing: 4) {
-            Text(String(format: "%.0f", value))
-                .font(.title3)
-                .fontWeight(.bold)
-                .foregroundColor(color)
-            Text(name)
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-struct RecentMealsCard: View {
-    let meals: [Meal]
-    
-    var body: some View {
-        VStack(spacing: 12) {
-            Text("Recent Meals")
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            
-            ForEach(meals.prefix(3)) { meal in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(meal.timestamp, style: .time)
-                            .font(.subheadline)
-                        Text("\(meal.totals.kcal) kcal")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: meal.source == .image ? "camera" : "text.alignleft")
-                        .foregroundColor(.secondary)
-                }
-                .padding(.vertical, 4)
-            }
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(radius: 2)
-    }
-}
-
-struct WeightCard: View {
-    let weight: Weight
-    
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading) {
-                Text("Latest Weight")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text(String(format: "%.1f kg", weight.weight_kg))
-                    .font(.title3)
-                    .fontWeight(.bold)
-            }
-            Spacer()
-            Text(weight.timestamp, style: .date)
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(radius: 2)
-    }
-}
-
-struct LatestWeightCard: View {
-    let weightKg: Double
-    
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading) {
-                Text("Latest Weight")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text(String(format: "%.1f kg", weightKg))
-                    .font(.title3)
-                    .fontWeight(.bold)
-            }
-            Spacer()
-            Text("From API")
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(radius: 2)
     }
 }
