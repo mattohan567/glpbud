@@ -342,6 +342,7 @@ struct StreakItemView: View {
 struct WeightChartView: View {
     let weightPoints: [WeightPoint]
     let range: String
+    @AppStorage("weight_unit") private var weightUnit = Config.defaultWeightUnit
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -355,16 +356,18 @@ struct WeightChartView: View {
                     .frame(maxWidth: .infinity, minHeight: 200)
             } else {
                 Chart(weightPoints, id: \.date) { point in
+                    let displayWeight = WeightUtils.convertFromKg(point.weight_kg, toUnit: weightUnit)
+
                     LineMark(
                         x: .value("Date", point.date),
-                        y: .value("Weight", point.weight_kg)
+                        y: .value("Weight", displayWeight)
                     )
                     .foregroundStyle(.blue)
                     .interpolationMethod(.catmullRom)
 
                     PointMark(
                         x: .value("Date", point.date),
-                        y: .value("Weight", point.weight_kg)
+                        y: .value("Weight", displayWeight)
                     )
                     .foregroundStyle(.blue)
                     .symbol(.circle)
@@ -383,7 +386,7 @@ struct WeightChartView: View {
                         AxisGridLine()
                         AxisValueLabel {
                             if let weight = value.as(Double.self) {
-                                Text("\(weight, specifier: "%.1f") kg")
+                                Text("\(weight, specifier: "%.1f") \(weightUnit)")
                             }
                         }
                     }

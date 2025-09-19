@@ -4,6 +4,7 @@ struct ProfileView: View {
     @EnvironmentObject var authManager: AuthManager
     @AppStorage("calorie_target") private var calorieTarget = Config.defaultCalorieTarget
     @AppStorage("protein_target") private var proteinTarget = Config.defaultProteinTarget
+    @AppStorage("weight_unit") private var weightUnit = Config.defaultWeightUnit
     @State private var showingSignOutAlert = false
     
     var body: some View {
@@ -45,6 +46,23 @@ struct ProfileView: View {
                             Spacer()
                             Text("\(proteinTarget) g")
                                 .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Section("Preferences") {
+                        HStack {
+                            Image(systemName: "scalemass")
+                                .foregroundColor(.blue)
+                                .frame(width: 20)
+                            Text("Weight Unit")
+                            Spacer()
+                            Picker("Weight Unit", selection: $weightUnit) {
+                                ForEach(Config.weightUnits, id: \.self) { unit in
+                                    Text(unit.uppercased()).tag(unit)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 100)
                         }
                     }
 

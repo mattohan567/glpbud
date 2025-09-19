@@ -16,15 +16,13 @@ struct KeyboardToolbar: ViewModifier {
     func body(content: Content) -> some View {
         content
             .toolbar {
-                ToolbarItem(placement: .keyboard) {
-                    HStack {
-                        Spacer()
-                        Button("Done") {
-                            action()
-                        }
-                        .foregroundColor(.blue)
-                        .fontWeight(.semibold)
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        action()
                     }
+                    .foregroundColor(.blue)
+                    .fontWeight(.semibold)
                 }
             }
     }
@@ -61,5 +59,19 @@ extension View {
         onAppear {
             UIApplication.shared.hideKeyboard()
         }
+    }
+
+    /// Safely dismiss keyboard when view disappears to prevent session issues
+    func dismissKeyboardOnDisappear() -> some View {
+        onDisappear {
+            UIApplication.shared.hideKeyboard()
+        }
+    }
+
+    /// Complete keyboard management (appear + disappear)
+    func manageKeyboard() -> some View {
+        self
+            .dismissKeyboardOnAppear()
+            .dismissKeyboardOnDisappear()
     }
 }

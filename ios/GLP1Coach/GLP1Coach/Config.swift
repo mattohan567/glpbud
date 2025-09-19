@@ -44,4 +44,8 @@ struct Config {
     static let defaultProteinTarget = 100
     static let defaultWeightUnit = "kg"
     static let defaultHeightUnit = "cm"
+
+    // Unit Options
+    static let weightUnits = ["kg", "lbs"]
+    static let heightUnits = ["cm", "ft"]
 }

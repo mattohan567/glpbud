@@ -12,7 +12,7 @@ enum Theme {
     static let danger = Color(hex: 0xEF4444)          // red-500
     static let success = Color(hex: 0x22C55E)         // emerald-500
 
-    // Card backgrounds (adapt for dark mode)
+    // Card backgrounds
     static let cardBgLight = Color.white.opacity(0.18)
     static let cardBgDark = Color.black.opacity(0.25)
 

@@ -292,7 +292,12 @@ struct UnifiedMealRecordView: View {
             requestMicrophonePermission()
             requestSpeechPermission()
         }
+        .onDisappear {
+            // Properly dismiss keyboard and clear focus to prevent session issues
+            isTextEditorFocused = false
+        }
         .tapToDismissKeyboard()
+        .manageKeyboard()
     }
 
     private func requestMicrophonePermission() {
@@ -910,7 +915,12 @@ struct UnifiedExerciseRecordView: View {
         .onAppear {
             requestMicrophonePermission()
         }
+        .onDisappear {
+            // Properly dismiss keyboard and clear focus to prevent session issues
+            isTextEditorFocused = false
+        }
         .tapToDismissKeyboard()
+        .manageKeyboard()
     }
 
     private func requestMicrophonePermission() {
@@ -1197,6 +1207,7 @@ struct WeightRecordView: View {
 struct WeightRecordContent: View {
     @EnvironmentObject var store: DataStore
     @EnvironmentObject var apiClient: APIClient
+    @AppStorage("weight_unit") private var weightUnit = Config.defaultWeightUnit
     @State private var weight = ""
     @State private var isLoading = false
     @State private var showingAlert = false
@@ -1206,17 +1217,39 @@ struct WeightRecordContent: View {
         VStack(spacing: Theme.spacing.lg) {
             GlassCard {
                 VStack(alignment: .leading, spacing: Theme.spacing.lg) {
-                    SectionHeader("Weight")
-
                     HStack {
-                        TextField("Weight", text: $weight)
-                            .keyboardType(.decimalPad)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 120)
-                            .keyboardToolbar()
-                        Text("kg")
-                            .foregroundStyle(Theme.textSecondary)
+                        Image(systemName: "scalemass.fill")
+                            .font(.title2)
+                            .foregroundStyle(Theme.accent)
+                        SectionHeader("Record Weight")
                         Spacer()
+
+                        // Unit toggle
+                        Picker("Unit", selection: $weightUnit) {
+                            ForEach(Config.weightUnits, id: \.self) { unit in
+                                Text(unit.uppercased()).tag(unit)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 90)
+                    }
+
+                    VStack(alignment: .leading, spacing: Theme.spacing.md) {
+                        HStack {
+                            TextField(WeightUtils.getPlaceholder(for: weightUnit), text: $weight)
+                                .keyboardType(.decimalPad)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 120)
+                                .keyboardToolbar()
+                            Text(weightUnit)
+                                .font(.headline)
+                                .foregroundStyle(Theme.textSecondary)
+                            Spacer()
+                        }
+
+                        Text("Range: \(WeightUtils.getWeightRange(for: weightUnit))")
+                            .font(.caption)
+                            .foregroundStyle(Theme.textTertiary)
                     }
                 }
             }
@@ -1225,19 +1258,24 @@ struct WeightRecordContent: View {
             if let latestWeight = store.latestWeight {
                 GlassCard {
                     HStack {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.title2)
+                            .foregroundStyle(Theme.textSecondary)
+
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Previous")
+                            Text("Previous Weight")
                                 .font(.caption)
                                 .foregroundStyle(Theme.textTertiary)
-                            Text(String(format: "%.1f kg", latestWeight))
+                            Text(WeightUtils.displayWeight(latestWeight, unit: weightUnit))
                                 .font(.headline)
                                 .foregroundStyle(Theme.textPrimary)
                         }
                         Spacer()
-                        Text("From latest data")
+                        Text("Latest entry")
                             .font(.caption)
                             .foregroundStyle(Theme.textTertiary)
                     }
+                    .padding(.vertical, 4)
                 }
             }
 
@@ -1259,26 +1297,37 @@ struct WeightRecordContent: View {
     
     private func logWeight() {
         guard let weightValue = Double(weight) else { return }
-        
+
+        // Validate weight in current unit
+        guard WeightUtils.validateWeight(weightValue, unit: weightUnit) else {
+            alertMessage = WeightUtils.getValidationError(for: weightUnit)
+            showingAlert = true
+            return
+        }
+
         isLoading = true
-        
+
         Task {
             do {
+                // Convert to kg for backend storage
+                let weightInKg = WeightUtils.convertToKg(weightValue, fromUnit: weightUnit)
+
                 let weightEntry = Weight(
                     id: UUID(),
                     timestamp: Date(),
-                    weight_kg: weightValue,
+                    weight_kg: weightInKg,
                     method: "manual"
                 )
-                
+
                 // Log to backend
                 _ = try await apiClient.logWeight(weightEntry)
-                
-                // Refresh today's data  
+
+                // Refresh today's data
                 await store.refreshTodayStats(apiClient: apiClient)
-                
+
                 await MainActor.run {
-                    alertMessage = "Weight logged: \(String(format: "%.1f", weightValue)) kg"
+                    let displayWeight = WeightUtils.displayWeight(weightInKg, unit: weightUnit)
+                    alertMessage = "Weight logged: \(displayWeight)"
                     showingAlert = true
                     weight = ""
                     isLoading = false

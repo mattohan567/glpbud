@@ -9,18 +9,22 @@ final class DataStore: ObservableObject {
     @Published var errorMessage: String?
     @Published var syncStatus: SyncStatus = .synced
     @Published var offlineMode = false
-    
+
     // Local storage with sync status
     @Published var meals: [Meal] = []
     @Published var exercises: [Exercise] = []
     @Published var weights: [Weight] = []
-    
+
     // Sync tracking
     @Published var pendingSyncCount = 0
-    
+
     private let userDefaults = UserDefaults.standard
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+
+    // Task cancellation
+    private var currentRefreshTask: Task<Void, Never>?
+    private var currentSyncTask: Task<Void, Never>?
     
     // Keys for UserDefaults caching
     private let mealsKey = "cached_meals"
@@ -129,53 +133,81 @@ final class DataStore: ObservableObject {
     // MARK: - Data Synchronization
     
     func refreshTodayStats(apiClient: APIClient) async {
-        isLoading = true
-        do {
-            todayStats = try await apiClient.getToday()
-            errorMessage = nil
-            offlineMode = false
-            saveCachedData()
-        } catch {
-            print("⚠️ Failed to refresh today stats: \(error)")
+        // Cancel any existing refresh task
+        currentRefreshTask?.cancel()
 
-            // Provide more specific error messages based on error type
-            if let apiError = error as? APIError {
-                switch apiError {
-                case .unauthorized:
-                    errorMessage = "Session expired. Please sign in again."
-                    offlineMode = true
-                case .serverError(let code):
-                    errorMessage = "Server temporarily unavailable (\(code))"
-                    offlineMode = true
-                case .decodingError:
-                    errorMessage = "Data format error. Using cached data."
-                    offlineMode = false // This isn't necessarily an offline issue
+        currentRefreshTask = Task {
+            guard !Task.isCancelled else { return }
+
+            isLoading = true
+
+            do {
+                guard !Task.isCancelled else { return }
+                todayStats = try await apiClient.getToday()
+                errorMessage = nil
+                offlineMode = false
+                saveCachedData()
+            } catch {
+                guard !Task.isCancelled else { return }
+
+                // Don't log cancellation as an error
+                if (error as NSError).code == NSURLErrorCancelled {
+                    return
                 }
-            } else if (error as NSError).code == -1009 {
-                // Network offline error
-                errorMessage = "No internet connection. Using cached data."
-                offlineMode = true
-            } else {
-                errorMessage = "Connection failed. Using cached data."
-                offlineMode = true
+
+                print("⚠️ Failed to refresh today stats: \(error)")
+
+                // Provide more specific error messages based on error type
+                if let apiError = error as? APIError {
+                    switch apiError {
+                    case .unauthorized:
+                        errorMessage = "Session expired. Please sign in again."
+                        offlineMode = true
+                    case .serverError(let code):
+                        errorMessage = "Server temporarily unavailable (\(code))"
+                        offlineMode = true
+                    case .decodingError:
+                        errorMessage = "Data format error. Using cached data."
+                        offlineMode = false // This isn't necessarily an offline issue
+                    }
+                } else if (error as NSError).code == -1009 {
+                    // Network offline error
+                    errorMessage = "No internet connection. Using cached data."
+                    offlineMode = true
+                } else {
+                    errorMessage = "Connection failed. Using cached data."
+                    offlineMode = true
+                }
+
+                // Keep using cached data
             }
 
-            // Keep using cached data
+            guard !Task.isCancelled else { return }
+            isLoading = false
         }
-        isLoading = false
+
+        await currentRefreshTask?.value
     }
     
     func syncPendingData(apiClient: APIClient) async {
         guard pendingSyncCount > 0 else { return }
+
+        // Cancel existing sync task
+        currentSyncTask?.cancel()
+
+        currentSyncTask = Task {
+            guard !Task.isCancelled else { return }
+
+            syncStatus = .syncing
+            var syncErrors: [String] = []
         
-        syncStatus = .syncing
-        var syncErrors: [String] = []
-        
-        // Sync pending meals
-        for i in 0..<meals.count {
-            if meals[i].syncStatus == .pending {
-                meals[i].syncStatus = .syncing
-                do {
+            // Sync pending meals
+            for i in 0..<meals.count {
+                guard !Task.isCancelled else { return }
+
+                if meals[i].syncStatus == .pending {
+                    meals[i].syncStatus = .syncing
+                    do {
                     let mealParse = MealParseDTO(
                         items: meals[i].items,
                         totals: meals[i].totals,
@@ -253,17 +285,22 @@ final class DataStore: ObservableObject {
             }
         }
         
-        // Update sync status
-        if syncErrors.isEmpty {
-            syncStatus = .synced
-            offlineMode = false
-        } else {
-            syncStatus = .failed
-            errorMessage = syncErrors.joined(separator: "\n")
+            // Update sync status
+            guard !Task.isCancelled else { return }
+
+            if syncErrors.isEmpty {
+                syncStatus = .synced
+                offlineMode = false
+            } else {
+                syncStatus = .failed
+                errorMessage = syncErrors.joined(separator: "\n")
+            }
+
+            // Save updated data
+            saveCachedData()
         }
-        
-        // Save updated data
-        saveCachedData()
+
+        await currentSyncTask?.value
     }
     
     // MARK: - Data Management
@@ -360,9 +397,35 @@ final class DataStore: ObservableObject {
     }
     
     var latestWeight: Double? {
-        // TodayResp doesn't include weight data yet
-        // This will be nil until we add weight to the API response
-        return nil
+        // Get the most recent weight from local weights array
+        return weights.sorted(by: { $0.timestamp > $1.timestamp }).first?.weight_kg
+    }
+
+    // MARK: - Weight Display Helpers
+
+    /// Get the latest weight formatted in the user's preferred unit
+    /// - Parameter unit: Preferred weight unit ("kg" or "lbs")
+    /// - Returns: Formatted weight string with unit, or nil if no weight data
+    func getLatestWeightFormatted(unit: String) -> String? {
+        guard let weightInKg = latestWeight else { return nil }
+        return WeightUtils.displayWeight(weightInKg, unit: unit)
+    }
+
+    /// Get weight change since last entry
+    /// - Parameter unit: Preferred weight unit for display
+    /// - Returns: Weight change string with unit, or nil if insufficient data
+    func getWeightChange(unit: String) -> String? {
+        let sortedWeights = weights.sorted(by: { $0.timestamp > $1.timestamp })
+        guard sortedWeights.count >= 2 else { return nil }
+
+        let latest = sortedWeights[0].weight_kg
+        let previous = sortedWeights[1].weight_kg
+        let changeInKg = latest - previous
+
+        let changeInUnit = WeightUtils.convertFromKg(abs(changeInKg), toUnit: unit)
+        let sign = changeInKg >= 0 ? "+" : "-"
+
+        return "\(sign)\(String(format: "%.1f", changeInUnit)) \(unit)"
     }
     
     var todayMeals: [Meal] {
