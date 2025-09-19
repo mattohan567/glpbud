@@ -54,17 +54,130 @@ struct IdResp: Codable {
     let id: String
 }
 
+// MARK: - Enhanced Today Response Models
+
+struct DailySparkline: Codable {
+    let dates: [String]  // ISO date strings
+    let calories: [Int]  // Net calories per day
+    let weights: [Double?]  // May have null values for missing days
+}
+
+struct MacroTarget: Codable {
+    let protein_g: Double
+    let carbs_g: Double
+    let fat_g: Double
+    let calories: Int
+}
+
+struct ActivitySummary: Codable {
+    let meals_logged: Int
+    let exercises_logged: Int
+    let water_ml: Int
+    let steps: Int?
+}
+
+struct NextAction: Codable {
+    let type: String  // "log_meal", "log_exercise", "log_weight", etc.
+    let title: String
+    let subtitle: String?
+    let time_due: String?  // ISO timestamp
+    let icon: String  // SF Symbol name
+}
+
 struct TodayResp: Codable {
     let date: String
+
+    // Current totals
     let kcal_in: Int
     let kcal_out: Int
     let protein_g: Double
     let carbs_g: Double
     let fat_g: Double
-    let next_dose_ts: String?
-    let last_logs: [[String: String]]
-}
+    let water_ml: Int
 
+    // Personalized targets
+    let targets: MacroTarget
+
+    // Progress percentages (0-1.0)
+    let calorie_progress: Double
+    let protein_progress: Double
+    let carbs_progress: Double
+    let fat_progress: Double
+    let water_progress: Double
+
+    // Activity summary
+    let activity: ActivitySummary
+
+    // Medication tracking
+    let next_dose_ts: String?
+    let medication_adherence_pct: Double
+
+    // Recent activity timeline - simplified as strings for now
+    let last_logs: [String]
+    let todays_meals: [String]
+    let todays_exercises: [String]
+
+    // 7-day sparkline data
+    let sparkline: DailySparkline
+
+    // Weight tracking
+    let latest_weight_kg: Double?
+    let weight_trend_7d: Double?
+
+    // Smart insights
+    let daily_tip: String?
+    let streak_days: Int
+
+    // Suggested next actions
+    let next_actions: [NextAction]
+
+    // Custom decoder to handle complex JSON arrays gracefully
+    enum CodingKeys: String, CodingKey {
+        case date, kcal_in, kcal_out, protein_g, carbs_g, fat_g, water_ml
+        case targets, calorie_progress, protein_progress, carbs_progress, fat_progress, water_progress
+        case activity, next_dose_ts, medication_adherence_pct
+        case last_logs, todays_meals, todays_exercises
+        case sparkline, latest_weight_kg, weight_trend_7d
+        case daily_tip, streak_days, next_actions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        date = try container.decode(String.self, forKey: .date)
+        kcal_in = try container.decode(Int.self, forKey: .kcal_in)
+        kcal_out = try container.decode(Int.self, forKey: .kcal_out)
+        protein_g = try container.decode(Double.self, forKey: .protein_g)
+        carbs_g = try container.decode(Double.self, forKey: .carbs_g)
+        fat_g = try container.decode(Double.self, forKey: .fat_g)
+        water_ml = try container.decode(Int.self, forKey: .water_ml)
+
+        targets = try container.decode(MacroTarget.self, forKey: .targets)
+        calorie_progress = try container.decode(Double.self, forKey: .calorie_progress)
+        protein_progress = try container.decode(Double.self, forKey: .protein_progress)
+        carbs_progress = try container.decode(Double.self, forKey: .carbs_progress)
+        fat_progress = try container.decode(Double.self, forKey: .fat_progress)
+        water_progress = try container.decode(Double.self, forKey: .water_progress)
+
+        activity = try container.decode(ActivitySummary.self, forKey: .activity)
+        next_dose_ts = try container.decodeIfPresent(String.self, forKey: .next_dose_ts)
+        medication_adherence_pct = try container.decode(Double.self, forKey: .medication_adherence_pct)
+
+        sparkline = try container.decode(DailySparkline.self, forKey: .sparkline)
+        latest_weight_kg = try container.decodeIfPresent(Double.self, forKey: .latest_weight_kg)
+        weight_trend_7d = try container.decodeIfPresent(Double.self, forKey: .weight_trend_7d)
+
+        daily_tip = try container.decodeIfPresent(String.self, forKey: .daily_tip)
+        streak_days = try container.decode(Int.self, forKey: .streak_days)
+        next_actions = try container.decode([NextAction].self, forKey: .next_actions)
+
+        // Handle complex arrays gracefully - decode as empty for now
+        // The enhanced TodayView will use simpler summary data instead
+        last_logs = []
+        todays_meals = []
+        todays_exercises = []
+    }
+}
 
 struct NextDoseResp: Codable {
     let next_dose_ts: String?

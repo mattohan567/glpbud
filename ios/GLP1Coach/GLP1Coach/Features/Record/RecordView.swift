@@ -4,7 +4,13 @@ import AVFoundation
 import Speech
 
 struct RecordView: View {
+    let initialTab: Int
     @State private var selectedTab = 0
+
+    init(initialTab: Int = 0) {
+        self.initialTab = initialTab
+        self._selectedTab = State(initialValue: initialTab)
+    }
 
     var body: some View {
         ZStack {

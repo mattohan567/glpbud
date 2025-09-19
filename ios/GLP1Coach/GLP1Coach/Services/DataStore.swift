@@ -188,7 +188,18 @@ final class DataStore: ObservableObject {
 
         await currentRefreshTask?.value
     }
-    
+
+    func clearCache() async {
+        await MainActor.run {
+            todayStats = nil
+            weights.removeAll() // Clear local weight cache
+            userDefaults.removeObject(forKey: todayStatsKey)
+            userDefaults.removeObject(forKey: weightsKey)
+            // Clear legacy weight unit key for clean sync
+            userDefaults.removeObject(forKey: "weightUnit")
+        }
+    }
+
     func syncPendingData(apiClient: APIClient) async {
         guard pendingSyncCount > 0 else { return }
 
@@ -395,9 +406,80 @@ final class DataStore: ObservableObject {
     var todayFat: Double {
         todayStats?.fat_g ?? 0
     }
-    
+
+    // MARK: - Enhanced Today Properties
+
+    var calorieProgress: Double {
+        todayStats?.calorie_progress ?? 0.0
+    }
+
+    var proteinProgress: Double {
+        todayStats?.protein_progress ?? 0.0
+    }
+
+    var carbsProgress: Double {
+        todayStats?.carbs_progress ?? 0.0
+    }
+
+    var fatProgress: Double {
+        todayStats?.fat_progress ?? 0.0
+    }
+
+    var waterProgress: Double {
+        todayStats?.water_progress ?? 0.0
+    }
+
+    var dailyTip: String? {
+        todayStats?.daily_tip
+    }
+
+    var weeklyInsights: String? {
+        // Generate AI insights based on recent data
+        guard let stats = todayStats else { return nil }
+
+        let weightUnit = UserDefaults.standard.string(forKey: "weight_unit") ?? Config.defaultWeightUnit
+        let insights = generateWeeklyInsights(from: stats, weightUnit: weightUnit)
+        return insights.isEmpty ? nil : insights
+    }
+
+    var streakDays: Int {
+        todayStats?.streak_days ?? 0
+    }
+
+    var nextActions: [NextAction] {
+        todayStats?.next_actions ?? []
+    }
+
+    var macroTargets: MacroTarget? {
+        todayStats?.targets
+    }
+
+    var activitySummary: ActivitySummary? {
+        todayStats?.activity
+    }
+
+    var sparklineData: DailySparkline? {
+        todayStats?.sparkline
+    }
+
+    var weightTrend7d: Double? {
+        todayStats?.weight_trend_7d
+    }
+
+    var medicationAdherence: Double {
+        todayStats?.medication_adherence_pct ?? 100.0
+    }
+
+    var nextDoseTime: String? {
+        todayStats?.next_dose_ts
+    }
+
     var latestWeight: Double? {
-        // Get the most recent weight from local weights array
+        // Prioritize API data, fallback to local
+        if let apiWeight = todayStats?.latest_weight_kg {
+            return apiWeight
+        }
+        // Fallback to local weights array
         return weights.sorted(by: { $0.timestamp > $1.timestamp }).first?.weight_kg
     }
 
@@ -450,4 +532,46 @@ final class DataStore: ObservableObject {
     // - updateSyncStatus()
     
     // These operations should now be done directly through APIClient
+
+    private func generateWeeklyInsights(from stats: TodayResp, weightUnit: String) -> String {
+        var insights: [String] = []
+
+        // Weight trend insights
+        if let weightTrend = stats.weight_trend_7d {
+            let convertedTrend = WeightUtils.convertFromKg(abs(weightTrend), toUnit: weightUnit)
+            if weightTrend < -0.5 {
+                insights.append("🎉 Great progress! You've lost \(String(format: "%.1f", convertedTrend)) \(weightUnit) this week.")
+            } else if weightTrend > 0.5 {
+                insights.append("📈 Weight increased by \(String(format: "%.1f", convertedTrend)) \(weightUnit) this week. Consider reviewing your nutrition goals.")
+            } else {
+                insights.append("⚖️ Weight staying stable this week - consistency is key!")
+            }
+        }
+
+        // Calorie adherence insights
+        let calorieAdherence = stats.calorie_progress
+        if calorieAdherence < 0.7 {
+            insights.append("Consider adding more balanced meals to reach your calorie goals.")
+        } else if calorieAdherence > 1.2 {
+            insights.append("You're exceeding your calorie target. Try focusing on portion control.")
+        }
+
+        // Protein insights
+        let proteinProgress = stats.protein_progress
+        if proteinProgress < 0.8 {
+            insights.append("Add more protein-rich foods like chicken, fish, or legumes to your meals.")
+        }
+
+        // Activity insights
+        let mealsLogged = stats.activity.meals_logged
+        let exercisesLogged = stats.activity.exercises_logged
+        if mealsLogged >= 3 && exercisesLogged > 0 {
+            insights.append("Excellent logging consistency! Keep tracking both nutrition and exercise.")
+        } else if mealsLogged < 2 {
+            insights.append("Try logging all your meals for better insights into your progress.")
+        }
+
+        // Return the first 2 most relevant insights
+        return insights.prefix(2).joined(separator: " ")
+    }
 }

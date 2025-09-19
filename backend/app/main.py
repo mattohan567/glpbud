@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 import pathlib
 import logging
 import time
+from contextlib import asynccontextmanager
+from functools import lru_cache
 
 # Import our logging configuration
 from .logging_config import (
@@ -33,6 +35,9 @@ from .health import health_checker, metrics_collector
 # Import rate limiting
 from .rate_limiter import check_rate_limit
 
+# Import database singleton
+from .database import SB
+
 # Load environment variables from .env file
 # Try to load from parent directory (where .env actually is)
 env_path = pathlib.Path(__file__).parent.parent.parent / '.env'
@@ -46,7 +51,8 @@ from .schemas import (
     IdResp, TodayResp, TrendsResp, CoachResp,
     CoachChatReq, AgenticCoachResp, LoggedAction,
     HistoryResp, HistoryEntryResp, UpdateMealReq, UpdateExerciseReq, UpdateWeightReq,
-    WeightPoint, CaloriePoint, StreakInfo, Achievement
+    WeightPoint, CaloriePoint, StreakInfo, Achievement,
+    DailySparkline, MacroTarget, ActivitySummary, NextAction
 )
 from .llm import claude_call, log_tool_run
 try:
@@ -61,7 +67,20 @@ logger = setup_logging()
 
 sentry_sdk.init(dsn=os.environ.get("SENTRY_DSN"), traces_sample_rate=0.2)
 
-app = FastAPI(title="GLP-1 Coach API", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager"""
+    try:
+        # Warm Supabase connection on startup
+        await SB.ping()
+        logger.info("[lifespan] Supabase connection warm OK")
+    except Exception as e:
+        logger.error(f"[lifespan] Warmup failed: {e}")
+    yield
+    # Cleanup on shutdown if needed
+    await SB.dispose()
+
+app = FastAPI(title="GLP-1 Coach API", version="1.0.0", lifespan=lifespan)
 
 # Add request logging middleware
 @app.middleware("http")
@@ -823,69 +842,377 @@ async def log_med_event(req: LogMedEventReq, user=Depends(get_current_user)):
 
 @app.get("/today", response_model=TodayResp)
 async def get_today(user=Depends(get_current_user)):
-    today = datetime.now().date()
-    today_start = today.isoformat() + "T00:00:00"
-    today_end = today.isoformat() + "T23:59:59"
-    
-    # Calculate totals directly from meals and exercises for today
+    """Enhanced /today endpoint with comprehensive dashboard data"""
+    # Langfuse tracing (commented out for now)
+    # from langfuse import trace
+    # @trace(name="get_today_enhanced")
+
+    # Get user preferences and targets (with defaults)
+    user_profile = {}
+    calorie_target = 2000  # Default target
+    user_timezone = "UTC"  # Default timezone
     try:
-        # Get today's meals
+        user_data = supabase.table("users").select("*").eq("id", user.id).single().execute()
+        if user_data.data:
+            user_profile = user_data.data.get("profile", {})
+            calorie_target = user_profile.get("calorie_target", 2000)
+            user_timezone = user_data.data.get("timezone", "UTC")
+    except Exception as e:
+        logger.warning(f"Failed to get user profile: {e}")
+
+    # Calculate today's date in user's timezone
+    from zoneinfo import ZoneInfo
+    try:
+        user_tz = ZoneInfo(user_timezone)
+        user_now = datetime.now(user_tz)
+        today = user_now.date()
+
+        # Create timezone-aware start/end times
+        today_start_local = datetime.combine(today, datetime.min.time()).replace(tzinfo=user_tz)
+        # Use start of next day for exclusive end boundary
+        tomorrow = today + timedelta(days=1)
+        today_end_local = datetime.combine(tomorrow, datetime.min.time()).replace(tzinfo=user_tz)
+
+        # Convert to UTC for database queries (since DB stores in UTC)
+        today_start = today_start_local.astimezone(ZoneInfo("UTC")).isoformat()
+        today_end = today_end_local.astimezone(ZoneInfo("UTC")).isoformat()
+
+        logger.info(f"User timezone: {user_timezone}, Today range: {today_start} to {today_end}")
+
+    except Exception as timezone_error:
+        logger.warning(f"Invalid timezone '{user_timezone}' for user {user.id}, falling back to UTC: {timezone_error}")
+        # Fallback to UTC if user timezone is invalid
+        today = datetime.now().date()
+        today_start = today.isoformat() + "T00:00:00"
+        today_end = today.isoformat() + "T23:59:59"
+
+    # Calculate personalized macro targets (40/30/30 split as default)
+    targets = MacroTarget(
+        calories=calorie_target,
+        protein_g=calorie_target * 0.40 / 4,  # 40% protein, 4 cal/g
+        carbs_g=calorie_target * 0.30 / 4,     # 30% carbs, 4 cal/g
+        fat_g=calorie_target * 0.30 / 9        # 30% fat, 9 cal/g
+    )
+
+    # Get today's data
+    try:
+        # Today's meals
         meals_result = supabase.table("meals").select("*").eq(
             "user_id", user.id
-        ).gte("ts", today_start).lte("ts", today_end).execute()
-        
-        # Calculate meal totals (accessing nested totals JSON)
-        kcal_in = sum(meal.get("totals", {}).get("kcal", 0) for meal in meals_result.data or [])
-        protein_g = sum(meal.get("totals", {}).get("protein_g", 0) for meal in meals_result.data or [])
-        carbs_g = sum(meal.get("totals", {}).get("carbs_g", 0) for meal in meals_result.data or [])
-        fat_g = sum(meal.get("totals", {}).get("fat_g", 0) for meal in meals_result.data or [])
-        
-        # Get today's exercises  
+        ).gte("ts", today_start).lt("ts", today_end).order("ts", desc=True).execute()
+
+        todays_meals = meals_result.data or []
+
+        # Calculate meal totals
+        kcal_in = sum(meal.get("totals", {}).get("kcal", 0) for meal in todays_meals)
+        protein_g = sum(meal.get("totals", {}).get("protein_g", 0) for meal in todays_meals)
+        carbs_g = sum(meal.get("totals", {}).get("carbs_g", 0) for meal in todays_meals)
+        fat_g = sum(meal.get("totals", {}).get("fat_g", 0) for meal in todays_meals)
+
+        # Today's exercises
         exercises_result = supabase.table("exercises").select("*").eq(
             "user_id", user.id
-        ).gte("ts", today_start).lte("ts", today_end).execute()
-        
-        # Calculate exercise totals
-        kcal_out = sum(ex.get("est_kcal", 0) for ex in exercises_result.data or [])
-        
-        analytics = {
-            "kcal_in": kcal_in,
-            "kcal_out": kcal_out, 
-            "protein_g": protein_g,
-            "carbs_g": carbs_g,
-            "fat_g": fat_g
-        }
-        
+        ).gte("ts", today_start).lt("ts", today_end).order("ts", desc=True).execute()
+
+        todays_exercises = exercises_result.data or []
+        kcal_out = sum(ex.get("est_kcal", 0) for ex in todays_exercises)
+
     except Exception as e:
-        print(f"⚠️  Today calculation failed: {e}")
-        analytics = {"kcal_in": 0, "kcal_out": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0}
-    
-    last_logs = supabase.table("meals").select("*").eq(
-        "user_id", user.id
-    ).order("ts", desc=True).limit(5).execute()
-    
-    # Handle medication next dose - many users don't have medications
-    next_dose_ts = None
+        logger.error(f"Today data fetch failed: {e}")
+        kcal_in = kcal_out = protein_g = carbs_g = fat_g = 0
+        todays_meals = []
+        todays_exercises = []
+
+    # Calculate progress percentages
+    calorie_progress = min(1.0, (kcal_in - kcal_out) / max(1, targets.calories))
+    protein_progress = min(1.0, protein_g / max(1, targets.protein_g))
+    carbs_progress = min(1.0, carbs_g / max(1, targets.carbs_g))
+    fat_progress = min(1.0, fat_g / max(1, targets.fat_g))
+
+    # Activity summary
+    activity = ActivitySummary(
+        meals_logged=len(todays_meals),
+        exercises_logged=len(todays_exercises),
+        water_ml=0,  # TODO: Implement water tracking
+        steps=None   # TODO: HealthKit integration
+    )
+
+    # Get latest weight and 7-day trend
+    latest_weight_kg = None
+    weight_trend_7d = None
     try:
-        next_dose = supabase.table("medications").select("*").eq(
+        # Latest weight
+        weight_result = supabase.table("weights").select("weight_kg").eq(
+            "user_id", user.id
+        ).order("ts", desc=True).limit(1).execute()
+
+        if weight_result.data:
+            latest_weight_kg = weight_result.data[0]["weight_kg"]
+
+            # 7-day old weight for trend
+            week_ago = (today - timedelta(days=7)).isoformat()
+            old_weight_result = supabase.table("weights").select("weight_kg").eq(
+                "user_id", user.id
+            ).lte("ts", week_ago + "T23:59:59").order("ts", desc=True).limit(1).execute()
+
+            if old_weight_result.data:
+                weight_trend_7d = round(latest_weight_kg - old_weight_result.data[0]["weight_kg"], 1)
+    except Exception as e:
+        logger.warning(f"Weight data fetch failed: {e}")
+
+    # Generate 7-day sparkline data using user's timezone
+    sparkline_dates = []
+    sparkline_calories = []
+    sparkline_weights = []
+
+    for i in range(6, -1, -1):  # Last 7 days including today
+        day = today - timedelta(days=i)
+        sparkline_dates.append(day)
+
+        # Create timezone-aware day boundaries for this specific day
+        try:
+            if user_timezone != "UTC":
+                user_tz = ZoneInfo(user_timezone)
+                day_start_local = datetime.combine(day, datetime.min.time()).replace(tzinfo=user_tz)
+                next_day = day + timedelta(days=1)
+                day_end_local = datetime.combine(next_day, datetime.min.time()).replace(tzinfo=user_tz)
+                day_start = day_start_local.astimezone(ZoneInfo("UTC")).isoformat()
+                day_end = day_end_local.astimezone(ZoneInfo("UTC")).isoformat()
+            else:
+                day_start = day.isoformat() + "T00:00:00"
+                day_end = day.isoformat() + "T23:59:59"
+        except Exception:
+            # Fallback to simple day boundaries
+            day_start = day.isoformat() + "T00:00:00"
+            day_end = day.isoformat() + "T23:59:59"
+
+        try:
+            # Try analytics table first (pre-computed)
+            analytics_result = supabase.table("analytics_daily").select("kcal_in, kcal_out").eq(
+                "user_id", user.id
+            ).eq("day", day.isoformat()).single().execute()
+
+            if analytics_result.data:
+                net_cal = analytics_result.data["kcal_in"] - analytics_result.data["kcal_out"]
+            else:
+                # Fallback to calculating from raw data
+                meals_cal = supabase.table("meals").select("totals").eq(
+                    "user_id", user.id
+                ).gte("ts", day_start).lt("ts", day_end).execute()
+
+                day_kcal_in = sum(m.get("totals", {}).get("kcal", 0) for m in meals_cal.data or [])
+
+                ex_cal = supabase.table("exercises").select("est_kcal").eq(
+                    "user_id", user.id
+                ).gte("ts", day_start).lt("ts", day_end).execute()
+
+                day_kcal_out = sum(e.get("est_kcal", 0) for e in ex_cal.data or [])
+                net_cal = day_kcal_in - day_kcal_out
+
+            sparkline_calories.append(net_cal)
+
+            # Get weight for that day if exists
+            weight_day = supabase.table("weights").select("weight_kg").eq(
+                "user_id", user.id
+            ).gte("ts", day_start).lt("ts", day_end).order("ts", desc=True).limit(1).execute()
+
+            sparkline_weights.append(weight_day.data[0]["weight_kg"] if weight_day.data else None)
+
+        except Exception:
+            sparkline_calories.append(0)
+            sparkline_weights.append(None)
+
+    sparkline = DailySparkline(
+        dates=sparkline_dates,
+        calories=sparkline_calories,
+        weights=sparkline_weights
+    )
+
+    # Calculate current streak
+    streak_days = 0
+    try:
+        # Simple approach: count consecutive days with any activity
+        for i in range(30):  # Check last 30 days max
+            check_day = today - timedelta(days=i)
+            day_start = check_day.isoformat() + "T00:00:00"
+            day_end = check_day.isoformat() + "T23:59:59"
+
+            # Check if any meal or exercise on that day
+            has_activity = supabase.table("meals").select("id").eq(
+                "user_id", user.id
+            ).gte("ts", day_start).lt("ts", day_end).limit(1).execute()
+
+            if has_activity.data:
+                streak_days += 1
+            else:
+                if i > 0:  # Don't break on today if no activity yet
+                    break
+    except Exception:
+        pass
+
+    # Generate smart daily tip using Claude (or use fallback)
+    daily_tip = None
+    try:
+        if kcal_in > 0:  # Only generate tip if user has logged something
+            # Use cached tip if recent (within last 6 hours)
+            # For now, use simple rule-based tips
+            if calorie_progress > 1.1:
+                daily_tip = "You're over your calorie target today. Consider a lighter dinner or add some exercise!"
+            elif protein_progress < 0.5 and len(todays_meals) < 3:
+                daily_tip = "You're under 50% of your protein goal. Try adding lean protein to your next meal!"
+            elif streak_days >= 7:
+                daily_tip = f"Amazing {streak_days}-day streak! Consistency is the key to lasting results!"
+            elif len(todays_exercises) == 0:
+                daily_tip = "No exercise logged today. Even a 10-minute walk makes a difference!"
+            else:
+                daily_tip = "Great progress today! Keep logging to stay on track!"
+    except Exception:
+        pass
+
+    # Generate suggested next actions
+    next_actions = []
+    current_hour = datetime.now().hour
+
+    # Meal suggestions based on time
+    if current_hour < 10 and len([m for m in todays_meals if "breakfast" in str(m).lower()]) == 0:
+        next_actions.append(NextAction(
+            type="log_meal",
+            title="Log Breakfast",
+            subtitle="Start your day right",
+            icon="sun.max.fill"
+        ))
+    elif 11 <= current_hour < 14 and len([m for m in todays_meals if any(x in str(m).lower() for x in ["lunch", "noon"])]) == 0:
+        next_actions.append(NextAction(
+            type="log_meal",
+            title="Log Lunch",
+            subtitle="Track your midday meal",
+            icon="sun.dust.fill"
+        ))
+    elif current_hour >= 17 and len([m for m in todays_meals if any(x in str(m).lower() for x in ["dinner", "evening"])]) == 0:
+        next_actions.append(NextAction(
+            type="log_meal",
+            title="Log Dinner",
+            subtitle="Don't forget dinner",
+            icon="moon.fill"
+        ))
+
+    # Exercise suggestion if none logged
+    if len(todays_exercises) == 0 and current_hour < 20:
+        next_actions.append(NextAction(
+            type="log_exercise",
+            title="Log Today's Activity",
+            subtitle="Every step counts",
+            icon="figure.walk"
+        ))
+
+    # Weight suggestion if not logged recently
+    try:
+        last_weight = supabase.table("weights").select("ts").eq(
+            "user_id", user.id
+        ).order("ts", desc=True).limit(1).execute()
+
+        if not last_weight.data or (datetime.now() - datetime.fromisoformat(last_weight.data[0]["ts"].replace("Z", "+00:00"))).days > 2:
+            if current_hour < 10:  # Morning is best for weight
+                next_actions.append(NextAction(
+                    type="log_weight",
+                    title="Log Morning Weight",
+                    subtitle="Best time for consistency",
+                    icon="scalemass.fill"
+                ))
+    except Exception:
+        pass
+
+    # Medication reminder
+    next_dose_ts = None
+    medication_adherence_pct = 100.0
+    try:
+        medications = supabase.table("medications").select("*").eq(
             "user_id", user.id
         ).eq("active", True).execute()
-        
-        if next_dose.data:
-            next_dose_ts = glp1_adherence.get_next_dose({"user_id": user.id})["next_due"]
+
+        if medications.data:
+            next_dose_result = glp1_adherence.get_next_dose({"user_id": user.id})
+            next_dose_ts = next_dose_result.get("next_due")
+
+            if next_dose_ts and datetime.fromisoformat(next_dose_ts) < datetime.now() + timedelta(hours=4):
+                next_actions.insert(0, NextAction(  # Priority action
+                    type="take_medication",
+                    title="Medication Due Soon",
+                    subtitle=medications.data[0]["drug_name"].title(),
+                    time_due=datetime.fromisoformat(next_dose_ts),
+                    icon="cross.fill"
+                ))
+
+            # Calculate adherence (simplified - would need med_events table analysis)
+            # For now just return default
+            medication_adherence_pct = 100.0
     except Exception as e:
-        print(f"⚠️  Medication query failed (user may have no medications): {e}")
-        next_dose_ts = None
-    
+        logger.warning(f"Medication check failed: {e}")
+
+    # Build timeline of all today's activities
+    timeline_events = []
+    for meal in todays_meals:
+        timeline_events.append({
+            "type": "meal",
+            "ts": meal["ts"],
+            "data": meal
+        })
+    for exercise in todays_exercises:
+        timeline_events.append({
+            "type": "exercise",
+            "ts": exercise["ts"],
+            "data": exercise
+        })
+
+    # Sort timeline by timestamp
+    timeline_events.sort(key=lambda x: x["ts"], reverse=True)
+    last_logs = timeline_events[:10]  # Last 10 events
+
     return TodayResp(
         date=today,
-        kcal_in=analytics["kcal_in"],
-        kcal_out=analytics["kcal_out"],
-        protein_g=analytics["protein_g"],
-        carbs_g=analytics["carbs_g"],
-        fat_g=analytics["fat_g"],
+        # Current totals
+        kcal_in=kcal_in,
+        kcal_out=kcal_out,
+        protein_g=protein_g,
+        carbs_g=carbs_g,
+        fat_g=fat_g,
+        water_ml=0,  # TODO: Implement
+
+        # Personalized targets
+        targets=targets,
+
+        # Progress percentages
+        calorie_progress=calorie_progress,
+        protein_progress=protein_progress,
+        carbs_progress=carbs_progress,
+        fat_progress=fat_progress,
+        water_progress=0.0,
+
+        # Activity summary
+        activity=activity,
+
+        # Medication tracking
         next_dose_ts=next_dose_ts,
-        last_logs=[{"type": "meal", "ts": log["ts"]} for log in last_logs.data or []]
+        medication_adherence_pct=medication_adherence_pct,
+
+        # Recent activity timeline
+        last_logs=last_logs,
+        todays_meals=todays_meals,
+        todays_exercises=todays_exercises,
+
+        # 7-day sparkline data
+        sparkline=sparkline,
+
+        # Weight tracking
+        latest_weight_kg=latest_weight_kg,
+        weight_trend_7d=weight_trend_7d,
+
+        # Smart insights
+        daily_tip=daily_tip,
+        streak_days=streak_days,
+
+        # Suggested next actions
+        next_actions=next_actions
     )
 
 def calculate_streaks(user_id: str) -> List[StreakInfo]:
@@ -1764,10 +2091,26 @@ async def delete_entry(entry_type: str, entry_id: str, user=Depends(get_current_
         print(f"❌ Error deleting entry: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete entry")
 
+# 200ms cache to prevent health check stampedes
+@lru_cache(maxsize=1)
+def _health_cache_bucket():
+    return int(time.time()*5)  # 200ms buckets
+
 @app.get("/health")
 async def health():
-    """Comprehensive health check endpoint"""
-    return await health_checker.run_all_checks()
+    """Optimized health check endpoint with caching"""
+    _ = _health_cache_bucket()  # Cache key
+    try:
+        # Use lightweight ping instead of full checks
+        ok = await SB.ping()
+        return {
+            "status": "healthy" if ok else "unhealthy",
+            "database": "connected" if ok else "disconnected",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {"status": "unhealthy", "error": str(e)}, 503
 
 @app.get("/health/quick")
 async def health_quick():

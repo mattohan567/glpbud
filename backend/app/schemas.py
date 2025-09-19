@@ -111,15 +111,80 @@ class IdResp(BaseModel):
     ok: bool = True
     id: str
 
+# Enhanced Today Response with comprehensive dashboard data
+class DailySparkline(BaseModel):
+    """7-day mini trend data for sparkline visualization"""
+    dates: List[date]
+    calories: List[int]  # Net calories per day
+    weights: List[Optional[float]]  # May have null values for missing days
+
+class MacroTarget(BaseModel):
+    """Personalized macro nutrient targets"""
+    protein_g: float
+    carbs_g: float
+    fat_g: float
+    calories: int
+
+class ActivitySummary(BaseModel):
+    """Summary of today's activities"""
+    meals_logged: int
+    exercises_logged: int
+    water_ml: int = 0  # Default 0 until we implement water tracking
+    steps: Optional[int] = None  # From HealthKit if available
+
+class NextAction(BaseModel):
+    """Suggested next action for user"""
+    type: Literal["log_meal", "log_exercise", "log_weight", "take_medication", "drink_water"]
+    title: str
+    subtitle: Optional[str] = None
+    time_due: Optional[datetime] = None
+    icon: str  # SF Symbol name
+
 class TodayResp(BaseModel):
     date: date
+    # Current totals
     kcal_in: int
     kcal_out: int
     protein_g: float
     carbs_g: float
     fat_g: float
+    water_ml: int = 0  # Default 0 until implemented
+
+    # Personalized targets
+    targets: MacroTarget
+
+    # Progress percentages (0-1.0)
+    calorie_progress: float
+    protein_progress: float
+    carbs_progress: float
+    fat_progress: float
+    water_progress: float = 0.0
+
+    # Activity summary
+    activity: ActivitySummary
+
+    # Medication tracking
     next_dose_ts: Optional[datetime] = None
+    medication_adherence_pct: float = 100.0  # Default 100% until we track
+
+    # Recent activity timeline
     last_logs: List[dict]
+    todays_meals: List[dict] = []  # Full meal objects for timeline
+    todays_exercises: List[dict] = []  # Full exercise objects for timeline
+
+    # 7-day sparkline data
+    sparkline: DailySparkline
+
+    # Weight tracking
+    latest_weight_kg: Optional[float] = None
+    weight_trend_7d: Optional[float] = None  # +/- kg change over 7 days
+
+    # Smart insights
+    daily_tip: Optional[str] = None  # AI-generated contextual tip
+    streak_days: int = 0  # Current logging streak
+
+    # Suggested next actions
+    next_actions: List[NextAction] = []
 
 class TrendsResp(BaseModel):
     range: str

@@ -1,5 +1,20 @@
 import SwiftUI
 
+// MARK: - Navigation Extensions
+
+extension Notification.Name {
+    static let navigateToRecord = Notification.Name("navigateToRecord")
+    static let navigateToTab = Notification.Name("navigateToTab")
+}
+
+struct NavigationInfo {
+    let recordTab: Int
+}
+
+struct TabNavigationInfo {
+    let tabIndex: Int
+}
+
 @main
 struct GLP1CoachApp: App {
     @StateObject private var store = DataStore()
@@ -49,6 +64,7 @@ struct GLP1CoachApp: App {
 
 struct MainTabView: View {
     @State private var selectedTab = 0
+    @State private var recordTabIndex = 0
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -62,7 +78,7 @@ struct MainTabView: View {
                     .padding(.bottom, 100) // Space for floating tab bar
                 case 1:
                     NavigationView {
-                        RecordView()
+                        RecordView(initialTab: recordTabIndex)
                     }
                     .padding(.bottom, 100)
                 case 2:
@@ -97,5 +113,16 @@ struct MainTabView: View {
             FloatingTabBar(selection: $selectedTab)
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToRecord)) { notification in
+            if let navigationInfo = notification.object as? NavigationInfo {
+                recordTabIndex = navigationInfo.recordTab
+            }
+            selectedTab = 1 // Navigate to Record tab
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToTab)) { notification in
+            if let tabInfo = notification.object as? TabNavigationInfo {
+                selectedTab = tabInfo.tabIndex
+            }
+        }
     }
 }

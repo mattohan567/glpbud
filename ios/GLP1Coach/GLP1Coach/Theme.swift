@@ -11,10 +11,14 @@ enum Theme {
     static let warn = Color(hex: 0xF59E0B)            // amber-500
     static let danger = Color(hex: 0xEF4444)          // red-500
     static let success = Color(hex: 0x22C55E)         // emerald-500
+    static let actionPurple = Color(hex: 0x7C3AED)    // violet-600 (darker purple)
 
     // Card backgrounds
     static let cardBgLight = Color.white.opacity(0.18)
     static let cardBgDark = Color.black.opacity(0.25)
+
+    // Convenience property for card background (adapts to color scheme)
+    static let cardBackground = Color.white.opacity(0.18)
 
     // Text colors
     static let textPrimary = Color.white
