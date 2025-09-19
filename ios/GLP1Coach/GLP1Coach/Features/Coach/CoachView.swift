@@ -68,7 +68,6 @@ struct CoachView: View {
                 .background(.ultraThinMaterial)
                 .padding(.bottom, 0) // Remove extra bottom padding since MainTabView handles spacing
             }
-            .navigationTitle("Coach")
         }
         .onAppear {
             if messages.isEmpty {

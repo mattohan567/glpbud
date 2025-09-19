@@ -10,7 +10,7 @@ struct ImagePicker: UIViewControllerRepresentable {
         let picker = UIImagePickerController()
         picker.sourceType = sourceType
         picker.delegate = context.coordinator
-        picker.allowsEditing = true
+        picker.allowsEditing = false
         return picker
     }
     

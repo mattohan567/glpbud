@@ -93,47 +93,52 @@ TOOLS = [
 ]
 
 def call_claude_vision(image_url: str, hints: str = None):
-    with langfuse.trace(name="vision_nutrition") as tr:
-        start = time.time()
-        
-        try:
-            msg = client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=1200,
-                system=SYSTEM_ORCHESTRATOR,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Parse this meal photo into items/macros JSON"},
-                        {"type": "image", "source": {"type": "url", "url": image_url}},
-                        {"type": "text", "text": f"Hints: {hints or 'none'}"}
-                    ]
-                }],
-            )
-            
-            latency = int((time.time() - start) * 1000)
-            
-            tr.update(
-                output=msg.content[0].text,
-                model="sonnet",
-                metadata={"image_url": image_url, "latency_ms": latency}
-            )
-            
-            # Log tool run
-            supabase.table("tool_runs").insert({
-                "tool_name": "vision_nutrition",
-                "input": {"image_url": image_url, "hints": hints},
-                "output": {"success": True},
-                "model": "claude-3-5-sonnet-20241022",
-                "latency_ms": latency,
-                "cost_usd": 0.001,
-                "success": True
-            }).execute()
-            
-            return json.loads(msg.content[0].text)
-            
-        except Exception as e:
-            tr.update(level="ERROR", metadata={"error": str(e)})
+    # Langfuse tracking disabled - uncomment to re-enable
+    # tr = langfuse.trace(name="vision_nutrition")
+    start = time.time()
+
+    try:
+        msg = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=1200,
+            system=SYSTEM_ORCHESTRATOR,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Parse this meal photo into items/macros JSON"},
+                    {"type": "image", "source": {"type": "url", "url": image_url}},
+                    {"type": "text", "text": f"Hints: {hints or 'none'}"}
+                ]
+            }],
+        )
+
+        latency = int((time.time() - start) * 1000)
+
+        # Langfuse tracking disabled - uncomment to re-enable
+        # tr.update(
+        #     output=msg.content[0].text,
+        #     model="sonnet",
+        #     metadata={"image_url": image_url, "latency_ms": latency}
+        # )
+        # tr.end()
+
+        # Log tool run
+        supabase.table("tool_runs").insert({
+            "tool_name": "vision_nutrition",
+            "input": {"image_url": image_url, "hints": hints},
+            "output": {"success": True},
+            "model": "claude-3-5-sonnet-20241022",
+            "latency_ms": latency,
+            "cost_usd": 0.001,
+            "success": True
+        }).execute()
+
+        return json.loads(msg.content[0].text)
+
+    except Exception as e:
+        # Langfuse tracking disabled - uncomment to re-enable
+        # tr.update(level="ERROR", metadata={"error": str(e)})
+        # tr.end()
             
             supabase.table("tool_runs").insert({
                 "tool_name": "vision_nutrition",
@@ -150,51 +155,58 @@ def call_claude_vision(image_url: str, hints: str = None):
 
 def call_claude_text(text: str, hints: str = None, use_haiku: bool = True):
     model = "claude-3-5-haiku-20241022" if use_haiku else "claude-3-5-sonnet-20241022"
-    
-    with langfuse.trace(name="text_nutrition") as tr:
-        start = time.time()
-        
-        try:
-            msg = client.messages.create(
-                model=model,
-                max_tokens=800,
-                system=SYSTEM_ORCHESTRATOR,
-                messages=[{
-                    "role": "user",
-                    "content": f"Parse this meal description into items/macros JSON: {text}\nHints: {hints or 'none'}"
-                }],
-            )
-            
-            latency = int((time.time() - start) * 1000)
-            
-            tr.update(
-                output=msg.content[0].text,
-                model=model,
-                metadata={"text": text[:100], "latency_ms": latency}
-            )
-            
-            result = json.loads(msg.content[0].text)
-            
-            # If low confidence, escalate to Sonnet
-            if use_haiku and result.get("confidence", 1.0) < 0.6:
-                return call_claude_text(text, hints, use_haiku=False)
-            
-            # Log tool run
-            supabase.table("tool_runs").insert({
-                "tool_name": "text_nutrition",
-                "input": {"text": text[:200], "hints": hints},
-                "output": {"confidence": result.get("confidence")},
-                "model": model,
-                "latency_ms": latency,
-                "cost_usd": 0.0005 if use_haiku else 0.001,
-                "success": True
-            }).execute()
-            
-            return result
-            
-        except Exception as e:
-            tr.update(level="ERROR", metadata={"error": str(e)})
-            raise
+
+    # Langfuse tracking disabled - uncomment to re-enable
+    # tr = langfuse.trace(name="text_nutrition")
+    start = time.time()
+
+    try:
+        msg = client.messages.create(
+            model=model,
+            max_tokens=800,
+            system=SYSTEM_ORCHESTRATOR,
+            messages=[{
+                "role": "user",
+                "content": f"Parse this meal description into items/macros JSON: {text}\nHints: {hints or 'none'}"
+            }],
+        )
+
+        latency = int((time.time() - start) * 1000)
+
+        # Langfuse tracking disabled - uncomment to re-enable
+        # tr.update(
+        #     output=msg.content[0].text,
+        #     model=model,
+        #     metadata={"text": text[:100], "latency_ms": latency}
+        # )
+
+        result = json.loads(msg.content[0].text)
+
+        # If low confidence, escalate to Sonnet
+        if use_haiku and result.get("confidence", 1.0) < 0.6:
+            # tr.end()  # Langfuse disabled
+            return call_claude_text(text, hints, use_haiku=False)
+
+        # tr.end()  # Langfuse disabled
+
+        # Log tool run
+        supabase.table("tool_runs").insert({
+            "tool_name": "text_nutrition",
+            "input": {"text": text[:200], "hints": hints},
+            "output": {"confidence": result.get("confidence")},
+            "model": model,
+            "latency_ms": latency,
+            "cost_usd": 0.0005 if use_haiku else 0.001,
+            "success": True
+        }).execute()
+
+        return result
+
+    except Exception as e:
+        # Langfuse tracking disabled - uncomment to re-enable
+        # tr.update(level="ERROR", metadata={"error": str(e)})
+        # tr.end()
+        raise
 
 def process_job(job):
     """Process a single job from the queue."""

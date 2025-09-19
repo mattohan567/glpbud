@@ -20,7 +20,7 @@ struct Config {
     
     // API Configuration
     #if DEBUG
-    static let apiBaseURL = "http://192.168.86.29:8000"  // Local development - Mac's IP for iPhone testing
+    static let apiBaseURL = "https://glp1coach-api.fly.dev"  // Using production for temporary location
     #else
     static let apiBaseURL = "https://glp1coach-api.fly.dev"  // Production
     #endif

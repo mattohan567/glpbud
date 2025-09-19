@@ -120,7 +120,6 @@ struct HistoryView: View {
                     }
                 }
             }
-            .navigationTitle("History")
             .task {
                 await loadHistory()
             }
