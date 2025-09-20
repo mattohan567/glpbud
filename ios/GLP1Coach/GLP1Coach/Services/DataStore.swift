@@ -410,23 +410,28 @@ final class DataStore: ObservableObject {
     // MARK: - Enhanced Today Properties
 
     var calorieProgress: Double {
-        todayStats?.calorie_progress ?? 0.0
+        let progress = todayStats?.calorie_progress ?? 0.0
+        return progress.isNaN || progress.isInfinite ? 0.0 : progress
     }
 
     var proteinProgress: Double {
-        todayStats?.protein_progress ?? 0.0
+        let progress = todayStats?.protein_progress ?? 0.0
+        return progress.isNaN || progress.isInfinite ? 0.0 : progress
     }
 
     var carbsProgress: Double {
-        todayStats?.carbs_progress ?? 0.0
+        let progress = todayStats?.carbs_progress ?? 0.0
+        return progress.isNaN || progress.isInfinite ? 0.0 : progress
     }
 
     var fatProgress: Double {
-        todayStats?.fat_progress ?? 0.0
+        let progress = todayStats?.fat_progress ?? 0.0
+        return progress.isNaN || progress.isInfinite ? 0.0 : progress
     }
 
     var waterProgress: Double {
-        todayStats?.water_progress ?? 0.0
+        let progress = todayStats?.water_progress ?? 0.0
+        return progress.isNaN || progress.isInfinite ? 0.0 : progress
     }
 
     var dailyTip: String? {

@@ -9,23 +9,95 @@ struct MacroTotals: Codable {
     let fat_g: Double
 }
 
-struct MealItemDTO: Codable {
-    let name: String
-    let qty: Double
-    let unit: String
-    let kcal: Int
-    let protein_g: Double
-    let carbs_g: Double
-    let fat_g: Double
+struct MealItemDTO: Codable, Identifiable {
+    var name: String
+    var qty: Double
+    var unit: String
+    var kcal: Int
+    var protein_g: Double
+    var carbs_g: Double
+    var fat_g: Double
     let fdc_id: Int?
+
+    // Stable UUID for SwiftUI identity - generated once per item
+    let id: UUID
+
+    init(name: String, qty: Double, unit: String, kcal: Int, protein_g: Double, carbs_g: Double, fat_g: Double, fdc_id: Int?) {
+        self.name = name
+        self.qty = qty
+        self.unit = unit
+        self.kcal = kcal
+        self.protein_g = protein_g
+        self.carbs_g = carbs_g
+        self.fat_g = fat_g
+        self.fdc_id = fdc_id
+        self.id = UUID()
+    }
+
+    // Custom coding keys to exclude id from JSON
+    enum CodingKeys: String, CodingKey {
+        case name, qty, unit, kcal, protein_g, carbs_g, fat_g, fdc_id
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        qty = try container.decode(Double.self, forKey: .qty)
+        unit = try container.decode(String.self, forKey: .unit)
+        kcal = try container.decode(Int.self, forKey: .kcal)
+        protein_g = try container.decode(Double.self, forKey: .protein_g)
+        carbs_g = try container.decode(Double.self, forKey: .carbs_g)
+        fat_g = try container.decode(Double.self, forKey: .fat_g)
+        fdc_id = try container.decodeIfPresent(Int.self, forKey: .fdc_id)
+        id = UUID() // Generate new UUID when decoding
+    }
 }
 
 struct MealParseDTO: Codable {
-    let items: [MealItemDTO]
-    let totals: MacroTotals
+    var items: [MealItemDTO]
+    var totals: MacroTotals
     let confidence: Double
     let questions: [String]?
     let low_confidence: Bool
+}
+
+// MARK: - Meal Fix DTOs
+struct FixMealParseReq: Codable {
+    let original_parse: MealParseDTO
+    let fix_prompt: String
+}
+
+struct FixMealResp: Codable {
+    let updated_parse: MealParseDTO
+    let changes_applied: [String]
+}
+
+struct FixItemReq: Codable {
+    let original_item: MealItemDTO
+    let fix_prompt: String
+    let meal_context: [MealItemDTO]?
+}
+
+struct FixItemResp: Codable {
+    let updated_item: MealItemDTO
+    let changes_applied: [String]
+}
+
+struct AddFoodReq: Codable {
+    let food_description: String
+    let existing_items: [MealItemDTO]?
+}
+
+struct AddFoodResp: Codable {
+    let new_item: MealItemDTO
+}
+
+// MARK: - Nutrition Totals DTO
+struct NutritionTotalsDTO: Codable {
+    var kcal: Int
+    var protein_g: Double
+    var carbs_g: Double
+    var fat_g: Double
 }
 
 struct ExerciseItemDTO: Codable {
@@ -250,7 +322,16 @@ struct HistoryEntryResp: Identifiable, Decodable {
     enum CodingKeys: String, CodingKey {
         case id, ts, type, display_name, details
     }
-    
+
+    // Regular initializer for testing/previews
+    init(id: String, ts: Date, type: EntryType, display_name: String, details: [String: Any]) {
+        self.id = id
+        self.ts = ts
+        self.type = type
+        self.display_name = display_name
+        self.details = details
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)

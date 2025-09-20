@@ -6,9 +6,13 @@ struct HistoryView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var selectedFilter: HistoryEntryResp.EntryType? = nil
-    @State private var selectedEntry: HistoryEntryResp? = nil
-    @State private var showingEditSheet = false
+    @State private var entryToDelete: HistoryEntryResp? = nil
+    @State private var showingDeleteConfirmation = false
     @State private var sortOrder: SortOrder = .newestFirst
+    @State private var isSelectionMode = false
+    @State private var selectedEntries: Set<String> = []
+    @State private var showingBulkDeleteConfirmation = false
+    @State private var expandedEntries: Set<String> = []
     
     enum SortOrder: String, CaseIterable {
         case newestFirst = "Newest First"
@@ -64,27 +68,57 @@ struct HistoryView: View {
                         }
                         .padding(.vertical, 10)
                         
-                        // Sort picker
+                        // Sort picker and controls
                         HStack {
-                            Text("Sort by:")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            
-                            Picker("Sort Order", selection: $sortOrder) {
-                                ForEach(SortOrder.allCases, id: \.self) { order in
-                                    HStack {
-                                        Image(systemName: order.systemImage)
-                                        Text(order.rawValue)
+                            if !isSelectionMode {
+                                Text("Sort by:")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+
+                                Picker("Sort Order", selection: $sortOrder) {
+                                    ForEach(SortOrder.allCases, id: \.self) { order in
+                                        HStack {
+                                            Image(systemName: order.systemImage)
+                                            Text(order.rawValue)
+                                        }
+                                        .tag(order)
                                     }
-                                    .tag(order)
+                                }
+                                .pickerStyle(.menu)
+                                .onChange(of: sortOrder) { _, _ in
+                                    sortEntries()
+                                }
+                            } else {
+                                Text("\(selectedEntries.count) selected")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+
+                                if !selectedEntries.isEmpty {
+                                    Button("Delete Selected") {
+                                        showingBulkDeleteConfirmation = true
+                                    }
+                                    .font(.caption)
+                                    .foregroundColor(.red)
                                 }
                             }
-                            .pickerStyle(.menu)
-                            .onChange(of: sortOrder) { _, _ in
-                                sortEntries()
-                            }
-                            
+
                             Spacer()
+
+                            Button(isSelectionMode ? "Cancel" : "Select") {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    isSelectionMode.toggle()
+                                    if !isSelectionMode {
+                                        selectedEntries.removeAll()
+                                    }
+                                }
+                            }
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundColor(isSelectionMode ? .red : .accentColor)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(isSelectionMode ? Color.red.opacity(0.1) : Color.accentColor.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                         }
                         .padding(.horizontal)
                         .padding(.bottom, 8)
@@ -105,15 +139,46 @@ struct HistoryView: View {
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else {
-                            List {
-                                ForEach(entries) { entry in
-                                    HistoryEntryRow(entry: entry) {
-                                        selectedEntry = entry
-                                        showingEditSheet = true
+                            ScrollView {
+                                LazyVStack(spacing: 4) {
+                                    ForEach(entries) { entry in
+                                    HistoryEntryRow(
+                                        entry: entry,
+                                        onDelete: {
+                                            entryToDelete = entry
+                                            showingDeleteConfirmation = true
+                                        },
+                                        isSelectionMode: isSelectionMode,
+                                        isSelected: selectedEntries.contains(entry.id),
+                                        onSelectionToggle: {
+                                            if selectedEntries.contains(entry.id) {
+                                                selectedEntries.remove(entry.id)
+                                            } else {
+                                                selectedEntries.insert(entry.id)
+                                            }
+                                        },
+                                        isExpanded: expandedEntries.contains(entry.id),
+                                        onExpandToggle: {
+                                            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                                                if expandedEntries.contains(entry.id) {
+                                                    expandedEntries.remove(entry.id)
+                                                } else {
+                                                    expandedEntries.insert(entry.id)
+                                                }
+                                            }
+                                        }
+                                    )
                                     }
                                 }
+                                .padding(.horizontal, 16)
                             }
                             .refreshable {
+                                // Exit selection mode during refresh to avoid state conflicts
+                                if isSelectionMode {
+                                    isSelectionMode = false
+                                    selectedEntries.removeAll()
+                                }
+                                expandedEntries.removeAll()
                                 await loadHistory()
                             }
                         }
@@ -128,15 +193,29 @@ struct HistoryView: View {
             } message: {
                 Text(errorMessage ?? "")
             }
-            .sheet(isPresented: $showingEditSheet) {
-                if let entry = selectedEntry {
-                    EditEntrySheet(entry: entry) {
-                        showingEditSheet = false
-                        selectedEntry = nil
-                        Task { await loadHistory() }
-                    }
-                    .environmentObject(apiClient)
+            .alert("Delete Entry", isPresented: $showingDeleteConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    entryToDelete = nil
                 }
+                Button("Delete", role: .destructive) {
+                    if let entry = entryToDelete {
+                        Task { await deleteEntry(entry) }
+                    }
+                }
+            } message: {
+                if let entry = entryToDelete {
+                    Text("Are you sure you want to delete this \(entry.type.displayName.lowercased()) entry? This action cannot be undone.")
+                }
+            }
+            .alert("Delete Selected Items", isPresented: $showingBulkDeleteConfirmation) {
+                Button("Cancel", role: .cancel) {
+                    // Keep selection
+                }
+                Button("Delete \(selectedEntries.count) Items", role: .destructive) {
+                    Task { await deleteSelectedEntries() }
+                }
+            } message: {
+                Text("Are you sure you want to delete \(selectedEntries.count) selected entries? This action cannot be undone.")
             }
         }
         .tapToDismissKeyboard()
@@ -169,6 +248,55 @@ struct HistoryView: View {
             entries.sort { $0.ts > $1.ts }
         case .oldestFirst:
             entries.sort { $0.ts < $1.ts }
+        }
+    }
+
+    private func deleteEntry(_ entry: HistoryEntryResp) async {
+        do {
+            print("🗑️ Attempting to delete entry: \(entry.id) of type: \(entry.type.rawValue)")
+            try await apiClient.deleteEntry(entryType: entry.type.rawValue, entryId: entry.id)
+            print("✅ Delete successful for entry: \(entry.id)")
+            await MainActor.run {
+                entries.removeAll { $0.id == entry.id }
+                entryToDelete = nil
+            }
+        } catch {
+            print("❌ Delete failed for entry: \(entry.id), error: \(error)")
+            await MainActor.run {
+                errorMessage = "Failed to delete entry: \(error.localizedDescription)"
+                entryToDelete = nil
+            }
+        }
+    }
+
+    private func deleteSelectedEntries() async {
+        let selectedEntriesToDelete = entries.filter { selectedEntries.contains($0.id) }
+        var deletedCount = 0
+        var failedCount = 0
+
+        for entry in selectedEntriesToDelete {
+            do {
+                print("🗑️ Bulk deleting entry: \(entry.id) of type: \(entry.type.rawValue)")
+                try await apiClient.deleteEntry(entryType: entry.type.rawValue, entryId: entry.id)
+                print("✅ Bulk delete successful for entry: \(entry.id)")
+                deletedCount += 1
+
+                await MainActor.run {
+                    entries.removeAll { $0.id == entry.id }
+                }
+            } catch {
+                print("❌ Bulk delete failed for entry: \(entry.id), error: \(error)")
+                failedCount += 1
+            }
+        }
+
+        await MainActor.run {
+            selectedEntries.removeAll()
+            isSelectionMode = false
+
+            if failedCount > 0 {
+                errorMessage = "Deleted \(deletedCount) entries. Failed to delete \(failedCount) entries."
+            }
         }
     }
 }
@@ -208,51 +336,242 @@ struct FilterButton: View {
 
 struct HistoryEntryRow: View {
     let entry: HistoryEntryResp
-    let onEdit: () -> Void
-    
+    let onDelete: () -> Void
+    let isSelectionMode: Bool
+    let isSelected: Bool
+    let onSelectionToggle: () -> Void
+    let isExpanded: Bool
+    let onExpandToggle: () -> Void
+
+
     var body: some View {
-        HStack {
-            // Icon
-            Image(systemName: entry.type.icon)
-                .font(.title2)
-                .foregroundColor(.blue)
-                .frame(width: 24, height: 24)
-            
-            VStack(alignment: .leading, spacing: 4) {
-                // Title
-                Text(entry.display_name)
-                    .font(.headline)
-                    .lineLimit(1)
-                
-                // Timestamp
-                Text(entry.ts.formatted(date: .abbreviated, time: .shortened))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
-                // Details
-                Text(detailText)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(2)
+        VStack(spacing: 0) {
+            // Main row - always visible
+            HStack(spacing: 12) {
+                // Selection checkbox (when in selection mode)
+                if isSelectionMode {
+                    Button {
+                        onSelectionToggle()
+                    } label: {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .foregroundColor(isSelected ? .blue : .gray)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // Icon
+                Image(systemName: entry.type.icon)
+                    .font(.title2)
+                    .foregroundColor(.blue)
+                    .frame(width: 28, height: 28)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    // Title
+                    Text(entry.display_name)
+                        .font(.headline)
+                        .lineLimit(2)
+
+                    // Timestamp
+                    Text(entry.ts.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    // Summary details
+                    Text(summaryText)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                // Expand chevron (for meals and exercises)
+                if entry.type == .meal || entry.type == .exercise {
+                    Button {
+                        onExpandToggle()
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            
-            Spacer()
-            
-            // Edit button
-            Button("Edit", action: onEdit)
-                .font(.caption)
-                .foregroundColor(.blue)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .contentShape(Rectangle())
+
+            // Expanded details - for meals and exercises
+            if isExpanded && entry.type == .meal {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Food items list
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(mealItems.enumerated()), id: \.element.name) { index, item in
+                            HStack {
+                                HStack(spacing: 8) {
+                                    Circle()
+                                        .fill(Color.blue.opacity(0.6))
+                                        .frame(width: 6, height: 6)
+
+                                    Text(item.name)
+                                        .font(.subheadline)
+                                        .foregroundColor(.primary)
+                                }
+
+                                Spacer()
+
+                                Text("\(item.kcal) kcal")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                    .fontWeight(.medium)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 6)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        }
+
+                        // Total row with enhanced styling
+                        HStack {
+                            HStack(spacing: 8) {
+                                Image(systemName: "sum")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+
+                                Text("Total")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.primary)
+                            }
+
+                            Spacer()
+
+                            Text("\(totalCalories) kcal")
+                                .font(.subheadline)
+                                .fontWeight(.bold)
+                                .foregroundColor(.blue)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                        )
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.top, 2)
+                }
+            }
+
+            // Expanded details - for exercises
+            if isExpanded && entry.type == .exercise {
+                VStack(alignment: .leading, spacing: 8) {
+                    // Exercise details
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(Color.orange.opacity(0.6))
+                                    .frame(width: 6, height: 6)
+
+                                Text("Duration")
+                                    .font(.subheadline)
+                                    .foregroundColor(.primary)
+                            }
+
+                            Spacer()
+
+                            Text(exerciseDuration)
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .fontWeight(.medium)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+
+                        if let caloriesBurned = exerciseCalories {
+                            HStack {
+                                HStack(spacing: 8) {
+                                    Circle()
+                                        .fill(Color.red.opacity(0.6))
+                                        .frame(width: 6, height: 6)
+
+                                    Text("Calories Burned")
+                                        .font(.subheadline)
+                                        .foregroundColor(.primary)
+                                }
+
+                                Spacer()
+
+                                Text("\(caloriesBurned) kcal")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                    .fontWeight(.medium)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 6)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .padding(.top, 2)
+            }
         }
-        .padding(.vertical, 4)
+        .onTapGesture {
+            if (entry.type == .meal || entry.type == .exercise) && !isSelectionMode {
+                onExpandToggle()
+            } else if isSelectionMode {
+                onSelectionToggle()
+            }
+        }
+        .onLongPressGesture {
+            onDelete()
+        }
     }
-    
-    private var detailText: String {
+
+    // Helper properties for meal expansion
+    private var mealItems: [(name: String, kcal: Int)] {
+        guard entry.type == .meal else { return [] }
+        let items = entry.details["items"] as? [[String: Any]] ?? []
+        return items.compactMap { dict in
+            guard let name = dict["name"] as? String,
+                  let kcal = dict["kcal"] as? Int else { return nil }
+            return (name: name, kcal: kcal)
+        }
+    }
+
+    private var totalCalories: Int {
+        entry.details["total_kcal"] as? Int ?? mealItems.reduce(0) { $0 + $1.kcal }
+    }
+
+    // Helper properties for exercise expansion
+    private var exerciseDuration: String {
+        guard entry.type == .exercise else { return "" }
+        let duration = (entry.details["duration_min"] as? Double) ??
+                      Double(entry.details["duration_min"] as? Int ?? 0)
+        return "\(Int(duration)) minutes"
+    }
+
+    private var exerciseCalories: Int? {
+        guard entry.type == .exercise else { return nil }
+        return (entry.details["est_kcal"] as? Int) ??
+               (entry.details["est_kcal"] as? Double).map { Int($0) }
+    }
+
+    private var summaryText: String {
         switch entry.type {
         case .meal:
-            let items = entry.details["items"] as? [[String: Any]] ?? []
-            let totalKcal = entry.details["total_kcal"] as? Int ?? 0
-            return "\(items.count) items • \(totalKcal) kcal"
-            
+            return "\(mealItems.count) items • \(totalCalories) kcal"
+
         case .exercise:
             // Handle both Int and Double for duration
             let duration = (entry.details["duration_min"] as? Double) ??
@@ -265,481 +584,19 @@ struct HistoryEntryRow: View {
             } else {
                 return "\(Int(duration)) minutes"
             }
-            
+
         case .weight:
             // Handle both Int and Double for weight_kg
             let weight = (entry.details["weight_kg"] as? Double) ??
                         Double(entry.details["weight_kg"] as? Int ?? 0)
             return "\(String(format: "%.1f", weight)) kg"
-            
+
         case .medication:
             return "Medication dose"
         }
     }
 }
 
-struct EditEntrySheet: View {
-    let entry: HistoryEntryResp
-    let onSave: () -> Void
-    @EnvironmentObject private var apiClient: APIClient
-    @Environment(\.dismiss) private var dismiss
-    @State private var isLoading = false
-    @State private var errorMessage: String?
-    
-    var body: some View {
-        NavigationView {
-            VStack {
-                if isLoading {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    switch entry.type {
-                    case .meal:
-                        EditMealView(entry: entry, onSave: handleSave)
-                    case .exercise:
-                        EditExerciseView(entry: entry, onSave: handleSave)
-                    case .weight:
-                        EditWeightView(entry: entry, onSave: handleSave)
-                    case .medication:
-                        Text("Medication editing not yet implemented")
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                }
-            }
-            .navigationTitle("Edit \(entry.type.displayName)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                }
-            }
-            .alert("Error", isPresented: .constant(errorMessage != nil)) {
-                Button("OK") { errorMessage = nil }
-            } message: {
-                Text(errorMessage ?? "")
-            }
-        }
-    }
-    
-    private func handleSave() async {
-        isLoading = true
-        await MainActor.run {
-            onSave()
-            dismiss()
-        }
-    }
-}
-
-// Individual edit views would be implemented here
-struct EditMealView: View {
-    let entry: HistoryEntryResp
-    let onSave: () async -> Void
-    @EnvironmentObject private var apiClient: APIClient
-    @State private var items: [MealItemDTO] = []
-    @State private var notes: String = ""
-    @State private var isLoading = false
-    @State private var errorMessage: String?
-
-    var body: some View {
-        Form {
-            Section("Meal Items") {
-                ForEach(items.indices, id: \.self) { index in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text(items[index].name)
-                                .font(.headline)
-                            Spacer()
-                            Button(role: .destructive) {
-                                items.remove(at: index)
-                            } label: {
-                                Image(systemName: "trash")
-                                    .foregroundColor(.red)
-                            }
-                        }
-
-                        HStack {
-                            Label("\(items[index].kcal) kcal", systemImage: "flame")
-                            Spacer()
-                            Text("\(Int(items[index].protein_g))g protein")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-
-            Section("Notes") {
-                TextField("Add notes (optional)", text: $notes, axis: .vertical)
-                    .lineLimit(3...6)
-            }
-
-            Section("Totals") {
-                HStack {
-                    Label("Total Calories", systemImage: "flame.fill")
-                    Spacer()
-                    Text("\(totalCalories) kcal")
-                        .fontWeight(.semibold)
-                }
-                HStack {
-                    Text("Protein")
-                    Spacer()
-                    Text("\(Int(totalProtein))g")
-                }
-                HStack {
-                    Text("Carbs")
-                    Spacer()
-                    Text("\(Int(totalCarbs))g")
-                }
-                HStack {
-                    Text("Fat")
-                    Spacer()
-                    Text("\(Int(totalFat))g")
-                }
-            }
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Save") {
-                    Task { await saveChanges() }
-                }
-                .disabled(items.isEmpty || isLoading)
-            }
-        }
-        .onAppear {
-            loadMealData()
-        }
-        .alert("Error", isPresented: .constant(errorMessage != nil)) {
-            Button("OK") { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "")
-        }
-    }
-
-    private func loadMealData() {
-        if let mealItems = entry.details["items"] as? [[String: Any]] {
-            items = mealItems.compactMap { dict in
-                guard let name = dict["name"] as? String,
-                      let kcal = dict["kcal"] as? Int else { return nil }
-
-                let qty = (dict["qty"] as? Double) ?? 1
-                let unit = (dict["unit"] as? String) ?? "serving"
-                let protein = (dict["protein_g"] as? Double) ?? 0
-                let carbs = (dict["carbs_g"] as? Double) ?? 0
-                let fat = (dict["fat_g"] as? Double) ?? 0
-
-                return MealItemDTO(
-                    name: name,
-                    qty: qty,
-                    unit: unit,
-                    kcal: kcal,
-                    protein_g: protein,
-                    carbs_g: carbs,
-                    fat_g: fat,
-                    fdc_id: nil
-                )
-            }
-        }
-        notes = (entry.details["notes"] as? String) ?? ""
-    }
-
-    private func saveChanges() async {
-        isLoading = true
-        defer { isLoading = false }
-
-        do {
-            _ = try await apiClient.updateMeal(
-                entryId: entry.id,
-                items: items,
-                notes: notes.isEmpty ? nil : notes
-            )
-            await onSave()
-        } catch {
-            errorMessage = "Failed to update meal: \(error.localizedDescription)"
-        }
-    }
-
-    private var totalCalories: Int {
-        items.reduce(0) { $0 + $1.kcal }
-    }
-
-    private var totalProtein: Double {
-        items.reduce(0) { $0 + $1.protein_g }
-    }
-
-    private var totalCarbs: Double {
-        items.reduce(0) { $0 + $1.carbs_g }
-    }
-
-    private var totalFat: Double {
-        items.reduce(0) { $0 + $1.fat_g }
-    }
-}
-
-struct EditExerciseView: View {
-    let entry: HistoryEntryResp
-    let onSave: () async -> Void
-    @EnvironmentObject private var apiClient: APIClient
-    @State private var exerciseType: String = ""
-    @State private var duration: Double = 30
-    @State private var intensity: String = "moderate"
-    @State private var calories: Int = 0
-    @State private var isLoading = false
-    @State private var errorMessage: String?
-
-    let intensityOptions = ["light", "moderate", "vigorous"]
-
-    var body: some View {
-        Form {
-            Section("Exercise Details") {
-                TextField("Exercise Type", text: $exerciseType)
-                    .autocapitalization(.words)
-
-                HStack {
-                    Text("Duration")
-                    Spacer()
-                    Text("\(Int(duration)) minutes")
-                        .foregroundColor(.secondary)
-                }
-                Slider(value: $duration, in: 5...180, step: 5) {
-                    Text("Duration")
-                }
-                .onChange(of: duration) { _ in
-                    updateEstimatedCalories()
-                }
-            }
-
-            Section("Intensity") {
-                Picker("Intensity", selection: $intensity) {
-                    ForEach(intensityOptions, id: \.self) { option in
-                        Text(option.capitalized).tag(option)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .onChange(of: intensity) { _ in
-                    updateEstimatedCalories()
-                }
-            }
-
-            Section("Calories Burned") {
-                HStack {
-                    Text("Estimated Calories")
-                    Spacer()
-                    TextField("Calories", value: $calories, format: .number)
-                        .keyboardType(.numberPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 80)
-                        .keyboardToolbar()
-                    Text("kcal")
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Save") {
-                    Task { await saveChanges() }
-                }
-                .disabled(exerciseType.isEmpty || isLoading)
-            }
-        }
-        .onAppear {
-            loadExerciseData()
-        }
-        .alert("Error", isPresented: .constant(errorMessage != nil)) {
-            Button("OK") { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "")
-        }
-    }
-
-    private func loadExerciseData() {
-        exerciseType = (entry.details["type"] as? String) ?? ""
-        duration = (entry.details["duration_min"] as? Double) ??
-                  Double(entry.details["duration_min"] as? Int ?? 30)
-        intensity = (entry.details["intensity"] as? String) ?? "moderate"
-        calories = (entry.details["est_kcal"] as? Int) ?? 0
-    }
-
-    private func updateEstimatedCalories() {
-        // Simple calorie estimation based on duration and intensity
-        let baseRate: Double
-        switch intensity {
-        case "light": baseRate = 3.5
-        case "moderate": baseRate = 7.0
-        case "vigorous": baseRate = 10.5
-        default: baseRate = 7.0
-        }
-        calories = Int(duration * baseRate)
-    }
-
-    private func saveChanges() async {
-        isLoading = true
-        defer { isLoading = false }
-
-        do {
-            _ = try await apiClient.updateExercise(
-                entryId: entry.id,
-                type: exerciseType,
-                durationMin: duration,
-                intensity: intensity,
-                estKcal: calories > 0 ? calories : nil
-            )
-            await onSave()
-        } catch {
-            errorMessage = "Failed to update exercise: \(error.localizedDescription)"
-        }
-    }
-}
-
-struct EditWeightView: View {
-    let entry: HistoryEntryResp
-    let onSave: () async -> Void
-    @EnvironmentObject private var apiClient: APIClient
-    @State private var weight: Double = 70
-    @State private var method: String = "scale"
-    @State private var isLoading = false
-    @State private var errorMessage: String?
-
-    let methodOptions = ["scale", "manual", "estimate"]
-
-    var body: some View {
-        Form {
-            Section("Weight Measurement") {
-                HStack {
-                    Text("Weight")
-                    Spacer()
-                    TextField("Weight", value: $weight, format: .number.precision(.fractionLength(1)))
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(width: 100)
-                        .keyboardToolbar()
-                    Text("kg")
-                        .foregroundColor(.secondary)
-                }
-
-                // Visual weight slider for easier adjustment
-                VStack {
-                    Slider(value: $weight, in: 30...200, step: 0.1)
-                    HStack {
-                        Text("30 kg")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text(String(format: "%.1f kg", weight))
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                        Spacer()
-                        Text("200 kg")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
-
-            Section("Method") {
-                Picker("Measurement Method", selection: $method) {
-                    Text("Scale").tag("scale")
-                    Text("Manual").tag("manual")
-                    Text("Estimate").tag("estimate")
-                }
-                .pickerStyle(.segmented)
-
-                Text(methodDescription)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Section("BMI") {
-                HStack {
-                    Text("BMI")
-                    Spacer()
-                    Text(String(format: "%.1f", bmi))
-                        .foregroundColor(bmiColor)
-                    Text("(\(bmiCategory))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button("Save") {
-                    Task { await saveChanges() }
-                }
-                .disabled(weight <= 0 || isLoading)
-            }
-        }
-        .onAppear {
-            loadWeightData()
-        }
-        .alert("Error", isPresented: .constant(errorMessage != nil)) {
-            Button("OK") { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "")
-        }
-    }
-
-    private func loadWeightData() {
-        weight = (entry.details["weight_kg"] as? Double) ??
-                Double(entry.details["weight_kg"] as? Int ?? 70)
-        method = (entry.details["method"] as? String) ?? "scale"
-    }
-
-    private func saveChanges() async {
-        isLoading = true
-        defer { isLoading = false }
-
-        do {
-            _ = try await apiClient.updateWeight(
-                entryId: entry.id,
-                weightKg: weight,
-                method: method
-            )
-            await onSave()
-        } catch {
-            errorMessage = "Failed to update weight: \(error.localizedDescription)"
-        }
-    }
-
-    private var methodDescription: String {
-        switch method {
-        case "scale": return "Measured using a calibrated scale"
-        case "manual": return "Manually entered measurement"
-        case "estimate": return "Estimated weight"
-        default: return ""
-        }
-    }
-
-    // Assuming average height of 1.7m for BMI calculation
-    // In a real app, this would come from user profile
-    private var bmi: Double {
-        let heightM = 1.7
-        return weight / (heightM * heightM)
-    }
-
-    private var bmiCategory: String {
-        switch bmi {
-        case ..<18.5: return "Underweight"
-        case 18.5..<25: return "Normal"
-        case 25..<30: return "Overweight"
-        default: return "Obese"
-        }
-    }
-
-    private var bmiColor: Color {
-        switch bmi {
-        case 18.5..<25: return .green
-        case 25..<30: return .orange
-        case 30...: return .red
-        default: return .blue
-        }
-    }
-}
 
 #Preview {
     HistoryView()

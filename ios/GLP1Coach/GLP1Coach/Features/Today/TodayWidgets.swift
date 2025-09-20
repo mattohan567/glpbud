@@ -11,6 +11,11 @@ struct MacroProgressCard: View {
     let color: Color
     let progress: Double
 
+    /// Safe progress value that handles NaN and infinite values
+    private var safeProgress: Double {
+        progress.isNaN || progress.isInfinite ? 0.0 : progress
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
@@ -33,16 +38,16 @@ struct MacroProgressCard: View {
 
                     Rectangle()
                         .fill(color)
-                        .frame(width: geometry.size.width * min(progress, 1.0), height: 6)
+                        .frame(width: geometry.size.width * min(safeProgress, 1.0), height: 6)
                         .cornerRadius(3)
-                        .animation(.easeInOut(duration: 0.5), value: progress)
+                        .animation(.easeInOut(duration: 0.5), value: safeProgress)
                 }
             }
             .frame(height: 6)
 
-            Text("\(Int(progress * 100))%")
+            Text("\(Int(safeProgress * 100))%")
                 .font(.caption2)
-                .foregroundStyle(progress > 1.0 ? Theme.warn : color)
+                .foregroundStyle(safeProgress > 1.0 ? Theme.warn : color)
         }
         .padding(12)
         .frame(minHeight: 110)
@@ -56,8 +61,13 @@ struct CalorieProgressRing: View {
     let target: Int
     let progress: Double
 
+    /// Safe progress value that handles NaN and infinite values
+    private var safeProgress: Double {
+        progress.isNaN || progress.isInfinite ? 0.0 : progress
+    }
+
     private var progressColor: Color {
-        switch progress {
+        switch safeProgress {
         case 0..<0.8: return Theme.accent
         case 0.8..<1.1: return Theme.success
         default: return Theme.warn
@@ -74,11 +84,11 @@ struct CalorieProgressRing: View {
 
                 // Progress ring
                 Circle()
-                    .trim(from: 0, to: min(progress, 1.5)) // Allow overrun visualization
+                    .trim(from: 0, to: min(safeProgress, 1.5)) // Allow overrun visualization
                     .stroke(progressColor, style: StrokeStyle(lineWidth: 12, lineCap: .round))
                     .frame(width: 100, height: 100)
                     .rotationEffect(.degrees(-90))
-                    .animation(.easeInOut(duration: 1.0), value: progress)
+                    .animation(.easeInOut(duration: 1.0), value: safeProgress)
 
                 // Center content
                 VStack(spacing: 2) {

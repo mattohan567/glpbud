@@ -85,6 +85,8 @@ struct UnifiedMealRecordView: View {
     @State private var isPlaying = false
     @State private var audioPlayerDelegate = AudioPlayerDelegate()
     @FocusState private var isTextEditorFocused: Bool
+    @State private var showingConfirmation = false
+    @State private var pendingMealParse: MealParseDTO?
 
     var body: some View {
         VStack(spacing: Theme.spacing.lg) {
@@ -108,7 +110,7 @@ struct UnifiedMealRecordView: View {
                                 .stroke(Color.white.opacity(0.2), lineWidth: 1)
                         )
                         .focused($isTextEditorFocused)
-                        .keyboardToolbar {
+                        .safeKeyboardToolbar {
                             isTextEditorFocused = false
                         }
 
@@ -267,7 +269,7 @@ struct UnifiedMealRecordView: View {
 
             // Analyze button
             PrimaryButton(
-                title: "Analyze & Log Meal",
+                title: "Analyze Meal",
                 isLoading: isLoading
             ) {
                 analyzeMeal()
@@ -304,6 +306,25 @@ struct UnifiedMealRecordView: View {
         }
         .tapToDismissKeyboard()
         .manageKeyboard()
+        .sheet(isPresented: $showingConfirmation) {
+            if let mealParse = pendingMealParse {
+                MealConfirmationView(
+                    mealParse: mealParse,
+                    onConfirm: { confirmedParse in
+                        logMeal(confirmedParse)
+                        showingConfirmation = false
+                        pendingMealParse = nil
+                    },
+                    onCancel: {
+                        showingConfirmation = false
+                        pendingMealParse = nil
+                    },
+                    onFixWithAI: { fixPrompt in
+                        fixMealWithAI(originalParse: mealParse, fixPrompt: fixPrompt)
+                    }
+                )
+            }
+        }
     }
 
     private func requestMicrophonePermission() {
@@ -626,28 +647,50 @@ struct UnifiedMealRecordView: View {
                     throw NSError(domain: "MealParsing", code: -1, userInfo: [NSLocalizedDescriptionKey: "Please provide a meal description using text, photo, or audio."])
                 }
 
-                // Determine primary source for logging
-                let primarySource: Meal.MealSource
-                if hasImage {
-                    primarySource = .image
-                } else if hasAudio {
-                    primarySource = .text  // Audio gets logged as text source for now
-                } else {
-                    primarySource = .text
+                await MainActor.run {
+                    // Check if no food was detected
+                    if parsed.items.isEmpty {
+                        alertMessage = "No food detected in the analysis. Please try again with a clearer description or image."
+                        showingAlert = true
+                        isLoading = false
+                        return
+                    }
+
+                    // Store parsed result and show confirmation
+                    pendingMealParse = parsed
+                    showingConfirmation = true
+                    isLoading = false
                 }
+
+            } catch {
+                await MainActor.run {
+                    alertMessage = "Error analyzing meal: \(error.localizedDescription)"
+                    showingAlert = true
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    private func logMeal(_ mealParse: MealParseDTO) {
+        isLoading = true
+        Task {
+            do {
+                // Determine primary source for logging
+                let primarySource: Meal.MealSource = selectedImage != nil ? .image : .text
 
                 let meal = Meal(
                     id: UUID(),
                     timestamp: Date(),
                     source: primarySource,
-                    items: parsed.items,
-                    totals: parsed.totals,
-                    confidence: parsed.confidence,
+                    items: mealParse.items,
+                    totals: mealParse.totals,
+                    confidence: mealParse.confidence,
                     notes: nil
                 )
 
                 // Log to backend
-                _ = try await apiClient.logMeal(meal: meal, parse: parsed)
+                _ = try await apiClient.logMeal(meal: meal, parse: mealParse)
 
                 // Refresh today's data
                 await store.refreshTodayStats(apiClient: apiClient)
@@ -658,17 +701,42 @@ struct UnifiedMealRecordView: View {
                     selectedImage = nil
                     recordingURL = nil
 
-                    alertMessage = "Meal logged successfully!\n\(parsed.totals.kcal) kcal\n" +
-                                  "Protein: \(Int(parsed.totals.protein_g))g | " +
-                                  "Carbs: \(Int(parsed.totals.carbs_g))g | " +
-                                  "Fat: \(Int(parsed.totals.fat_g))g"
+                    alertMessage = "Meal logged successfully!\n\(mealParse.totals.kcal) kcal\n" +
+                                  "Protein: \(Int(mealParse.totals.protein_g))g | " +
+                                  "Carbs: \(Int(mealParse.totals.carbs_g))g | " +
+                                  "Fat: \(Int(mealParse.totals.fat_g))g"
                     showingAlert = true
                     isLoading = false
                 }
 
             } catch {
                 await MainActor.run {
-                    alertMessage = "Error analyzing meal: \(error.localizedDescription)"
+                    alertMessage = "Error logging meal: \(error.localizedDescription)"
+                    showingAlert = true
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    private func fixMealWithAI(originalParse: MealParseDTO, fixPrompt: String) {
+        isLoading = true
+        Task {
+            do {
+                let fixedParse = try await apiClient.fixMealParse(originalParse: originalParse, fixPrompt: fixPrompt)
+
+                await MainActor.run {
+                    // Update pending parse with fixed result
+                    pendingMealParse = fixedParse
+                    isLoading = false
+
+                    // Show confirmation view again with fixed data
+                    showingConfirmation = true
+                }
+
+            } catch {
+                await MainActor.run {
+                    alertMessage = "Error fixing meal analysis: \(error.localizedDescription)"
                     showingAlert = true
                     isLoading = false
                 }
@@ -743,7 +811,7 @@ struct UnifiedExerciseRecordView: View {
                                     .stroke(Color.white.opacity(0.2), lineWidth: 1)
                             )
                             .focused($isTextEditorFocused)
-                            .keyboardToolbar {
+                            .safeKeyboardToolbar {
                                 isTextEditorFocused = false
                             }
 
@@ -878,7 +946,7 @@ struct UnifiedExerciseRecordView: View {
                                         .keyboardType(.numberPad)
                                         .textFieldStyle(.roundedBorder)
                                         .frame(width: 80)
-                                        .keyboardToolbar()
+                                        .numericKeyboardToolbar()
                                         .onChange(of: duration) { _ in
                                             estimatedCalories = nil
                                         }
@@ -1246,7 +1314,7 @@ struct WeightRecordContent: View {
                                 .keyboardType(.decimalPad)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 120)
-                                .keyboardToolbar()
+                                .numericKeyboardToolbar()
                             Text(weightUnit)
                                 .font(.headline)
                                 .foregroundStyle(Theme.textSecondary)

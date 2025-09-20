@@ -40,6 +40,30 @@ class ParseMealAudioReq(BaseModel):
     user_id: Optional[str] = None
     hints: Optional[str] = None
 
+class FixMealParseReq(BaseModel):
+    original_parse: MealParse
+    fix_prompt: str  # User description of what needs to be fixed
+
+class FixMealResp(BaseModel):
+    updated_parse: MealParse
+    changes_applied: List[str]
+
+class FixItemReq(BaseModel):
+    original_item: MealItem
+    fix_prompt: str  # User description of what needs to be fixed
+    meal_context: Optional[List[MealItem]] = None  # Other items for context
+
+class FixItemResp(BaseModel):
+    updated_item: MealItem
+    changes_applied: List[str]
+
+class AddFoodReq(BaseModel):
+    food_description: str  # Natural language description of food to add
+    existing_items: Optional[List[MealItem]] = None  # Current meal context
+
+class AddFoodResp(BaseModel):
+    new_item: MealItem  # List of changes that were made
+
 class LogMealReq(BaseModel):
     datetime: datetime
     source: Literal["image","text","manual"]
@@ -268,3 +292,7 @@ class TrendsResp(BaseModel):
     current_streaks: List[StreakInfo]
     achievements: List[Achievement]
     insights: List[str]
+
+class DeleteEntryReq(BaseModel):
+    entry_id: str
+    entry_type: Literal["meal", "exercise", "weight", "medication"]

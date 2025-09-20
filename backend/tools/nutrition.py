@@ -15,6 +15,10 @@ class VisionNutrition:
         """
         system_prompt = """You are a nutrition expert analyzing food photos.
         Analyze the image and identify all food items with portions and nutritional information.
+
+        IMPORTANT: If the image does not contain food or contains only non-food items (pets, objects, people, etc.),
+        return an empty items array and set confidence to 0.0.
+
         Return ONLY valid JSON in this exact format with no additional text:
         {
           "items": [
@@ -28,11 +32,13 @@ class VisionNutrition:
               "fat_g": fat in grams as number
             }
           ],
-          "confidence": 0.0 to 1.0
+          "confidence": 0.0 to 1.0,
+          "is_food": true or false
         }
-        
+
         Estimate portion sizes from visual cues (plate size, utensils, etc).
         Be accurate with nutritional values based on typical preparations.
+        Set is_food to false if no edible food items are detected.
         """
         
         user_message = [
@@ -83,7 +89,19 @@ class VisionNutrition:
                     response_text = response_text.split("```")[1].split("```")[0]
                     
                 data = json.loads(response_text)
-                
+
+                # Check if food was detected
+                is_food = data.get("is_food", True)
+                if not is_food or not data.get("items"):
+                    # No food detected - return empty parse with low confidence
+                    return MealParse(
+                        items=[],
+                        totals=MacroTotals(kcal=0, protein_g=0, carbs_g=0, fat_g=0),
+                        confidence=0.0,
+                        questions=["No food items detected in this image. Please try again with a clearer food photo."],
+                        low_confidence=True
+                    )
+
                 # Convert to MealItem objects
                 items = []
                 for item_data in data.get("items", []):
@@ -178,6 +196,12 @@ class TextNutrition:
         # Build the prompt for Claude
         system_prompt = """You are a nutrition expert analyzing food descriptions.
         Parse the food text into individual items with accurate nutritional information.
+
+        SPELLING & NAME CORRECTION:
+        - Always correct misspelled food names to their proper form
+        - Use standard, recognizable food names (e.g., "chiken" → "chicken", "bannana" → "banana")
+        - Normalize food names to common variations (e.g., "mac n cheese" → "macaroni and cheese")
+        - Fix obvious typos and provide the correct spelling in the output
 
         CRITICAL: Return ONLY valid JSON with no additional text, explanations, or markdown formatting.
 
@@ -578,5 +602,511 @@ class TextNutrition:
             
         return False
 
+    def fix_parse(self, original_parse: 'MealParse', fix_prompt: str) -> 'MealParse':
+        """Fix/re-parse meal analysis using AI with user feedback."""
+
+        # Build context from original parse
+        original_items = []
+        for item in original_parse.items:
+            original_items.append({
+                "name": item.name,
+                "qty": item.qty,
+                "unit": item.unit,
+                "kcal": item.kcal,
+                "protein_g": item.protein_g,
+                "carbs_g": item.carbs_g,
+                "fat_g": item.fat_g
+            })
+
+        system_prompt = """You are a nutrition expert fixing meal analysis based on user feedback.
+        The user provided feedback about what's wrong with the original analysis.
+        Please provide a corrected analysis based on their input.
+
+        Return ONLY valid JSON in this exact format with no additional text:
+        {
+          "items": [
+            {
+              "name": "food item name",
+              "qty": numeric quantity,
+              "unit": "g" or "ml" or "cup" etc,
+              "kcal": calories as integer,
+              "protein_g": protein in grams as number,
+              "carbs_g": carbs in grams as number,
+              "fat_g": fat in grams as number
+            }
+          ],
+          "confidence": 0.0 to 1.0
+        }
+
+        Fix the issues mentioned by the user while maintaining nutritional accuracy.
+        If portions need adjustment, scale all macros proportionally.
+        """
+
+        user_message = f"""Original analysis:
+{json.dumps(original_items, indent=2)}
+
+User feedback: {fix_prompt}
+
+Please provide the corrected meal analysis addressing the user's concerns."""
+
+        try:
+            # Call Claude API
+            response = claude_call(
+                messages=[{"role": "user", "content": user_message}],
+                system=system_prompt,
+                model="claude-3-5-sonnet-20241022",
+                metadata={"tool": "fix_nutrition_parse", "fix_prompt": fix_prompt[:100]}
+            )
+
+            # Extract JSON from response
+            response_text = response.content[0].text if response.content else "{}"
+
+            # Parse JSON
+            try:
+                if "```json" in response_text:
+                    response_text = response_text.split("```json")[1].split("```")[0]
+                elif "```" in response_text:
+                    response_text = response_text.split("```")[1].split("```")[0]
+
+                data = json.loads(response_text)
+
+                # Convert to MealItem objects
+                items = []
+                for item_data in data.get("items", []):
+                    items.append(
+                        MealItem(
+                            name=item_data.get("name", "unknown"),
+                            qty=float(item_data.get("qty", 100)),
+                            unit=item_data.get("unit", "g"),
+                            kcal=int(item_data.get("kcal", 0)),
+                            protein_g=float(item_data.get("protein_g", 0)),
+                            carbs_g=float(item_data.get("carbs_g", 0)),
+                            fat_g=float(item_data.get("fat_g", 0)),
+                            fdc_id=None
+                        )
+                    )
+
+                # Calculate totals
+                totals = MacroTotals(
+                    kcal=sum(item.kcal for item in items),
+                    protein_g=sum(item.protein_g for item in items),
+                    carbs_g=sum(item.carbs_g for item in items),
+                    fat_g=sum(item.fat_g for item in items)
+                )
+
+                confidence = data.get("confidence", 0.8)  # Higher confidence for corrections
+
+                return MealParse(
+                    items=items,
+                    totals=totals,
+                    confidence=confidence,
+                    questions=[],
+                    low_confidence=confidence < 0.6
+                )
+
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                print(f"Failed to parse Claude fix response: {e}")
+                # Return original parse if fix fails
+                return original_parse
+
+        except Exception as e:
+            print(f"Claude API call failed for fix: {e}")
+            # Return original parse if fix fails
+            return original_parse
+
 vision_nutrition = VisionNutrition()
 text_nutrition = TextNutrition()
+
+def _simple_spell_correct(food_name: str) -> str:
+    """Simple spell correction for common food misspellings"""
+    corrections = {
+        # Common food spelling errors
+        'chiken': 'chicken',
+        'chikken': 'chicken',
+        'chickn': 'chicken',
+        'bannana': 'banana',
+        'bananna': 'banana',
+        'bannanas': 'bananas',
+        'tomatoe': 'tomato',
+        'tomatos': 'tomatoes',
+        'potatoe': 'potato',
+        'potatos': 'potatoes',
+        'brocoli': 'broccoli',
+        'brocolli': 'broccoli',
+        'cabage': 'cabbage',
+        'cabage': 'cabbage',
+        'letuce': 'lettuce',
+        'lettuece': 'lettuce',
+        'cukumber': 'cucumber',
+        'cumcumber': 'cucumber',
+        'straberry': 'strawberry',
+        'strawbery': 'strawberry',
+        'blueberry': 'blueberry',
+        'bluberry': 'blueberry',
+        'rasberry': 'raspberry',
+        'raspbery': 'raspberry',
+        'oragne': 'orange',
+        'ornage': 'orange',
+        'appeL': 'apple',
+        'aple': 'apple',
+        'aplle': 'apple',
+        'pineaple': 'pineapple',
+        'pinnapple': 'pineapple',
+        'avacado': 'avocado',
+        'avacodo': 'avocado',
+        'avadaco': 'avocado',
+        'mushroom': 'mushroom',
+        'mushromm': 'mushroom',
+        'mushrrom': 'mushroom',
+        'onoin': 'onion',
+        'oinion': 'onion',
+        'carrit': 'carrot',
+        'carret': 'carrot',
+        'carot': 'carrot',
+        'celery': 'celery',
+        'celer': 'celery',
+        'celry': 'celery',
+        'spinage': 'spinach',
+        'spinich': 'spinach',
+        'kale': 'kale',
+        'kal': 'kale',
+        'raddish': 'radish',
+        'radish': 'radish',
+        'beaf': 'beef',
+        'bef': 'beef',
+        'prok': 'pork',
+        'prk': 'pork',
+        'lam': 'lamb',
+        'lamb': 'lamb',
+        'fish': 'fish',
+        'fsh': 'fish',
+        'salmin': 'salmon',
+        'samon': 'salmon',
+        'tuna': 'tuna',
+        'tna': 'tuna',
+        'shrimp': 'shrimp',
+        'shimp': 'shrimp',
+        'shrmp': 'shrimp',
+        'crab': 'crab',
+        'carb': 'crab',
+        'lobster': 'lobster',
+        'lobstr': 'lobster',
+        'rie': 'rice',
+        'rce': 'rice',
+        'ric': 'rice',
+        'pasta': 'pasta',
+        'psta': 'pasta',
+        'noodels': 'noodles',
+        'noodls': 'noodles',
+        'noddles': 'noodles',
+        'bred': 'bread',
+        'brad': 'bread',
+        'brd': 'bread',
+        'toste': 'toast',
+        'tost': 'toast',
+        'tos': 'toast',
+        'cerel': 'cereal',
+        'cerial': 'cereal',
+        'ceral': 'cereal',
+        'oatemeal': 'oatmeal',
+        'otmeal': 'oatmeal',
+        'oatmel': 'oatmeal',
+        'yougurt': 'yogurt',
+        'yoghurt': 'yogurt',
+        'yogrt': 'yogurt',
+        'chese': 'cheese',
+        'chees': 'cheese',
+        'ches': 'cheese',
+        'mlik': 'milk',
+        'milc': 'milk',
+        'mlk': 'milk',
+        'buter': 'butter',
+        'butr': 'butter',
+        'buttr': 'butter',
+        'eg': 'egg',
+        'egs': 'eggs',
+        'egss': 'eggs',
+        'cofee': 'coffee',
+        'coffe': 'coffee',
+        'cofe': 'coffee',
+        'te': 'tea',
+        'tee': 'tea',
+        'wat': 'water',
+        'watr': 'water',
+        'wter': 'water',
+        'juce': 'juice',
+        'juic': 'juice',
+        'jucie': 'juice',
+        'soda': 'soda',
+        'soda': 'soda',
+        'cooke': 'cookie',
+        'cooki': 'cookie',
+        'ckie': 'cookie',
+        'cak': 'cake',
+        'cke': 'cake',
+        'pie': 'pie',
+        'pi': 'pie',
+        'iccream': 'ice cream',
+        'icecream': 'ice cream',
+        'ice crem': 'ice cream',
+        'chocalate': 'chocolate',
+        'chocolate': 'chocolate',
+        'chocolat': 'chocolate',
+        'choclate': 'chocolate',
+        'chocolte': 'chocolate',
+        'candey': 'candy',
+        'candi': 'candy',
+        'cady': 'candy',
+        'nuts': 'nuts',
+        'nut': 'nut',
+        'almon': 'almond',
+        'almnd': 'almond',
+        'walut': 'walnut',
+        'walnt': 'walnut',
+        'penut': 'peanut',
+        'peantu': 'peanut',
+        'peant': 'peanut',
+        'cashew': 'cashew',
+        'cashw': 'cashew',
+        'pican': 'pecan',
+        'pecan': 'pecan',
+        'hzelnut': 'hazelnut',
+        'hazelnt': 'hazelnut',
+        'pistachio': 'pistachio',
+        'pistacio': 'pistachio',
+        'macaroni': 'macaroni',
+        'macroni': 'macaroni',
+        'mac n cheese': 'macaroni and cheese',
+        'mac and cheese': 'macaroni and cheese',
+        'pizza': 'pizza',
+        'piza': 'pizza',
+        'pzza': 'pizza',
+        'pizze': 'pizza',
+        'burgr': 'burger',
+        'burger': 'burger',
+        'hambrger': 'hamburger',
+        'hamburger': 'hamburger',
+        'hotdog': 'hot dog',
+        'hot dog': 'hot dog',
+        'hotdg': 'hot dog',
+        'sandwch': 'sandwich',
+        'sandwhich': 'sandwich',
+        'sandwitch': 'sandwich',
+        'sandwi': 'sandwich',
+        'sanwich': 'sandwich',
+        'taco': 'taco',
+        'tako': 'taco',
+        'tcos': 'tacos',
+        'tacoz': 'tacos',
+        'burito': 'burrito',
+        'buritto': 'burrito',
+        'burito': 'burrito',
+        'nachoes': 'nachos',
+        'nachoss': 'nachos',
+        'nacho': 'nachos',
+        'quesadila': 'quesadilla',
+        'quesadilla': 'quesadilla',
+        'ques': 'quesadilla',
+        'torila': 'tortilla',
+        'tortila': 'tortilla',
+        'tortilla': 'tortilla',
+        'salsa': 'salsa',
+        'salse': 'salsa',
+        'guacamole': 'guacamole',
+        'guac': 'guacamole',
+        'guacamol': 'guacamole',
+        'guacomole': 'guacamole',
+        'soup': 'soup',
+        'sou': 'soup',
+        'sup': 'soup',
+        'salad': 'salad',
+        'sald': 'salad',
+        'salda': 'salad',
+        'caeser': 'caesar',
+        'caesar': 'caesar',
+        'cesar': 'caesar',
+        'ceaser': 'caesar',
+        'dressing': 'dressing',
+        'dresing': 'dressing',
+        'dressin': 'dressing',
+        'oil': 'oil',
+        'ol': 'oil',
+        'vinegar': 'vinegar',
+        'vinegr': 'vinegar',
+        'vineagr': 'vinegar',
+        'salt': 'salt',
+        'slt': 'salt',
+        'pepr': 'pepper',
+        'pepper': 'pepper',
+        'peppr': 'pepper',
+        'sugar': 'sugar',
+        'sugr': 'sugar',
+        'suger': 'sugar',
+        'honey': 'honey',
+        'hony': 'honey',
+        'hney': 'honey',
+        'syrup': 'syrup',
+        'sirup': 'syrup',
+        'syrp': 'syrup',
+        'jam': 'jam',
+        'jem': 'jam',
+        'jm': 'jam',
+        'jelly': 'jelly',
+        'jely': 'jelly',
+        'jly': 'jelly',
+        'pnut butter': 'peanut butter',
+        'peanut butr': 'peanut butter',
+        'peanut buter': 'peanut butter',
+        'pb': 'peanut butter',
+        'crackers': 'crackers',
+        'crakers': 'crackers',
+        'crackrs': 'crackers',
+        'chips': 'chips',
+        'chps': 'chips',
+        'chipes': 'chips',
+        'popcorn': 'popcorn',
+        'popcor': 'popcorn',
+        'popcm': 'popcorn',
+        'pretzels': 'pretzels',
+        'pretzls': 'pretzels',
+        'pretzel': 'pretzel',
+        'granola': 'granola',
+        'granole': 'granola',
+        'granla': 'granola',
+        'beans': 'beans',
+        'bens': 'beans',
+        'benas': 'beans',
+        'benas': 'beans',
+        'lentils': 'lentils',
+        'lentls': 'lentils',
+        'lentis': 'lentils',
+        'chikpeas': 'chickpeas',
+        'chickpes': 'chickpeas',
+        'chickpas': 'chickpeas',
+        'chickpease': 'chickpeas',
+        'hummus': 'hummus',
+        'hmus': 'hummus',
+        'humus': 'hummus',
+        'hummas': 'hummus',
+        'quinoa': 'quinoa',
+        'quinoe': 'quinoa',
+        'quinao': 'quinoa',
+        'qinoa': 'quinoa',
+        'tofu': 'tofu',
+        'tofu': 'tofu',
+        'tofu': 'tofu',
+        'tempe': 'tempeh',
+        'tempeh': 'tempeh',
+        'seitan': 'seitan',
+        'setan': 'seitan',
+        'mushrooms': 'mushrooms',
+        'mushroms': 'mushrooms',
+        'mushroomz': 'mushrooms',
+        'mushrms': 'mushrooms'
+    }
+
+    # Split into words and correct each
+    words = food_name.lower().split()
+    corrected_words = []
+
+    for word in words:
+        # Remove punctuation for comparison
+        clean_word = word.strip('.,!?;:')
+        if clean_word in corrections:
+            corrected_words.append(corrections[clean_word])
+        else:
+            corrected_words.append(word)
+
+    # Join back and capitalize properly
+    corrected = ' '.join(corrected_words)
+    return corrected.title() if corrected else food_name
+
+def fix_meal_parse(original_parse: MealParse, fix_prompt: str) -> tuple[MealParse, list[str]]:
+    """
+    Fix or correct a meal parse based on user's natural language description.
+    Returns updated parse and list of changes applied.
+    """
+    # Use the existing fix_parse method from TextNutrition
+    fixed_parse = text_nutrition.fix_parse(original_parse, fix_prompt)
+    changes_applied = ["AI corrections applied based on your feedback"]
+    return fixed_parse, changes_applied
+
+def fix_item(original_item: MealItem, fix_prompt: str, meal_context: list[MealItem] = None) -> tuple[MealItem, list[str]]:
+    """
+    Fix or correct a single meal item based on user's natural language description.
+    Returns updated item and list of changes applied.
+    """
+    # Create a temporary meal parse with just this item for fixing
+    temp_parse = MealParse(
+        items=[original_item],
+        totals=MacroTotals(
+            kcal=original_item.kcal,
+            protein_g=original_item.protein_g,
+            carbs_g=original_item.carbs_g,
+            fat_g=original_item.fat_g
+        ),
+        confidence=0.8,
+        questions=None,
+        low_confidence=False
+    )
+
+    # Add context about other items if provided
+    context_info = ""
+    if meal_context:
+        other_items = [item.name for item in meal_context if item.name != original_item.name]
+        if other_items:
+            context_info = f" (This is part of a meal with: {', '.join(other_items)})"
+
+    # Use the fix_parse method with context
+    full_prompt = f"Fix this food item: {fix_prompt}{context_info}"
+    fixed_parse = text_nutrition.fix_parse(temp_parse, full_prompt)
+
+    # Extract the fixed item
+    if fixed_parse.items:
+        updated_item = fixed_parse.items[0]
+        changes_applied = [f"Updated {original_item.name} based on your feedback"]
+        return updated_item, changes_applied
+    else:
+        # Fallback if parsing failed
+        return original_item, ["No changes could be applied"]
+
+def add_food_item(food_description: str, existing_items: list[MealItem] = None) -> MealItem:
+    """
+    Parse a natural language food description into a meal item.
+    Uses context from existing items for better accuracy.
+    """
+    try:
+        # Add context about existing meal if provided
+        context_info = ""
+        if existing_items:
+            existing_names = [item.name for item in existing_items]
+            context_info = f" (Adding to existing meal with: {', '.join(existing_names)})"
+
+        # Parse the food description with context
+        full_description = f"{food_description}{context_info}"
+        parsed = text_nutrition.parse(full_description)
+
+        # Extract the first item (should be the new food)
+        if parsed.items:
+            return parsed.items[0]
+        else:
+            raise Exception("No items parsed")
+
+    except Exception as e:
+        print(f"Failed to parse food item '{food_description}': {e}")
+        # Fallback: create a simple item based on the description with spell correction
+        corrected_name = _simple_spell_correct(food_description.strip())
+
+        # Simple heuristics for basic nutrition estimates
+        name_lower = corrected_name.lower()
+        if any(word in name_lower for word in ['salad', 'lettuce', 'greens']):
+            return MealItem(name=corrected_name, qty=1, unit="serving", kcal=50, protein_g=2, carbs_g=8, fat_g=1, fdc_id=None)
+        elif any(word in name_lower for word in ['bread', 'roll', 'toast']):
+            return MealItem(name=corrected_name, qty=1, unit="slice", kcal=80, protein_g=3, carbs_g=15, fat_g=1, fdc_id=None)
+        elif any(word in name_lower for word in ['cookie', 'cake', 'dessert']):
+            return MealItem(name=corrected_name, qty=1, unit="piece", kcal=150, protein_g=2, carbs_g=20, fat_g=7, fdc_id=None)
+        elif any(word in name_lower for word in ['fries', 'chips']):
+            return MealItem(name=corrected_name, qty=1, unit="serving", kcal=200, protein_g=3, carbs_g=25, fat_g=10, fdc_id=None)
+        else:
+            # Generic fallback
+            return MealItem(name=corrected_name, qty=1, unit="serving", kcal=100, protein_g=5, carbs_g=15, fat_g=3, fdc_id=None)

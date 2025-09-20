@@ -44,7 +44,8 @@ env_path = pathlib.Path(__file__).parent.parent.parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
 from .schemas import (
-    ParseMealTextReq, ParseMealImageReq, ParseMealAudioReq, MealParse,
+    ParseMealTextReq, ParseMealImageReq, ParseMealAudioReq, FixMealParseReq, FixMealResp, MealParse,
+    FixItemReq, FixItemResp, AddFoodReq, AddFoodResp,
     ParseExerciseTextReq, ParseExerciseAudioReq, ExerciseParse,
     LogMealReq, LogExerciseReq, LogWeightReq,
     MedScheduleReq, LogMedEventReq, CoachAskReq,
@@ -52,7 +53,8 @@ from .schemas import (
     CoachChatReq, AgenticCoachResp, LoggedAction,
     HistoryResp, HistoryEntryResp, UpdateMealReq, UpdateExerciseReq, UpdateWeightReq,
     WeightPoint, CaloriePoint, StreakInfo, Achievement,
-    DailySparkline, MacroTarget, ActivitySummary, NextAction
+    DailySparkline, MacroTarget, ActivitySummary, NextAction,
+    DeleteEntryReq
 )
 from .llm import claude_call, log_tool_run
 try:
@@ -417,6 +419,49 @@ async def parse_meal_audio(req: ParseMealAudioReq, request: Request, user=Depend
     except ValidationError as e:
         logger.warning(f"Meal audio validation failed: {e.message}", extra={"user_id": user.id})
         raise HTTPException(status_code=422, detail={"error": e.error_code, "message": e.message, "field": e.field})
+
+    except Exception as e:
+        logger.error(f"Meal audio parsing failed: {e}", extra={"user_id": user.id})
+        raise HTTPException(status_code=500, detail=f"Audio parsing failed: {str(e)}")
+
+
+@app.post("/parse/meal-fix", response_model=MealParse)
+async def fix_meal_parse(req: FixMealParseReq, request: Request, user=Depends(get_current_user)):
+    """Fix/re-parse meal analysis using AI with user feedback."""
+    # Apply rate limiting for expensive parse operations
+    check_rate_limit(request, user.id, 'parse')
+
+    try:
+        logger.info(
+            f"Fixing meal parse for user {user.id}",
+            extra={
+                "user_id": user.id,
+                "original_items": len(req.original_parse.items),
+                "fix_prompt": req.fix_prompt[:100]
+            }
+        )
+
+        # Use enhanced nutrition parser with fix context
+        result = text_nutrition.fix_parse(req.original_parse, req.fix_prompt)
+
+        # Log event for analytics
+        supabase.table("event_bus").insert({
+            "user_id": user.id,
+            "type": "fix_meal_parse",
+            "payload": {
+                "fix_prompt": req.fix_prompt[:200],
+                "original_confidence": req.original_parse.confidence,
+                "new_confidence": result.confidence,
+                "items_before": len(req.original_parse.items),
+                "items_after": len(result.items)
+            }
+        }).execute()
+
+        return result
+
+    except ValidationError as e:
+        logger.warning(f"Meal fix validation failed: {e.message}", extra={"user_id": user.id})
+        raise HTTPException(status_code=422, detail={"error": e.error_code, "message": e.message, "field": e.field})
     except HTTPException:
         raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
@@ -456,6 +501,149 @@ async def transcribe_audio_simple(req: ParseMealAudioReq, request: Request, user
     except Exception as e:
         log_error(logger, e, {"user_id": user.id})
         raise HTTPException(status_code=500, detail="Failed to transcribe audio")
+
+@app.post("/fix/meal", response_model=FixMealResp)
+async def fix_meal(req: FixMealParseReq, request: Request, user=Depends(get_current_user)):
+    """Fix or correct a meal parse based on user's natural language description."""
+    # Apply rate limiting for expensive parse operations
+    check_rate_limit(request, user.id, 'parse')
+
+    try:
+        # Import nutrition module
+        try:
+            from tools.nutrition import fix_meal_parse
+        except ImportError:
+            from backend.tools.nutrition import fix_meal_parse
+
+        # Sanitize input text
+        clean_fix_prompt = sanitize_text(req.fix_prompt)
+
+        logger.info(
+            f"Fixing meal parse for user {user.id}",
+            extra={
+                "user_id": user.id,
+                "fix_prompt_length": len(clean_fix_prompt),
+                "original_items": len(req.original_parse.items)
+            }
+        )
+
+        # Apply the fix using AI
+        updated_parse, changes_applied = fix_meal_parse(req.original_parse, clean_fix_prompt)
+
+        logger.info(
+            f"Meal parse fixed successfully for user {user.id}",
+            extra={
+                "user_id": user.id,
+                "changes_count": len(changes_applied),
+                "confidence": updated_parse.confidence
+            }
+        )
+
+        return FixMealResp(
+            updated_parse=updated_parse,
+            changes_applied=changes_applied
+        )
+
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
+    except Exception as e:
+        log_error(logger, e, {"user_id": user.id, "fix_prompt": clean_fix_prompt[:100]})
+        raise HTTPException(status_code=500, detail="Failed to fix meal parse")
+
+@app.post("/fix/item", response_model=FixItemResp)
+async def fix_item_endpoint(req: FixItemReq, request: Request, user=Depends(get_current_user)):
+    """Fix or correct a single meal item based on user's natural language description."""
+    # Apply rate limiting for expensive parse operations
+    check_rate_limit(request, user.id, 'parse')
+    try:
+        # Import nutrition module
+        try:
+            from tools.nutrition import fix_item
+        except ImportError:
+            from backend.tools.nutrition import fix_item
+
+        # Sanitize input text
+        clean_fix_prompt = sanitize_text(req.fix_prompt)
+
+        logger.info(
+            f"Fixing meal item for user {user.id}",
+            extra={
+                "user_id": user.id,
+                "item_name": req.original_item.name,
+                "fix_prompt_length": len(clean_fix_prompt)
+            }
+        )
+
+        # Apply the fix using AI
+        updated_item, changes_applied = fix_item(
+            req.original_item,
+            clean_fix_prompt,
+            req.meal_context
+        )
+
+        logger.info(
+            f"Meal item fixed successfully for user {user.id}",
+            extra={
+                "user_id": user.id,
+                "item_name": updated_item.name,
+                "changes_count": len(changes_applied)
+            }
+        )
+
+        return FixItemResp(
+            updated_item=updated_item,
+            changes_applied=changes_applied
+        )
+
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
+    except Exception as e:
+        log_error(logger, e, {"user_id": user.id, "item_name": req.original_item.name})
+        raise HTTPException(status_code=500, detail="Failed to fix meal item")
+
+@app.post("/add/food", response_model=AddFoodResp)
+async def add_food_endpoint(req: AddFoodReq, request: Request, user=Depends(get_current_user)):
+    """Add a new food item to meal using natural language description."""
+    # Apply rate limiting for expensive parse operations
+    check_rate_limit(request, user.id, 'parse')
+    try:
+        # Import nutrition module
+        try:
+            from tools.nutrition import add_food_item
+        except ImportError:
+            from backend.tools.nutrition import add_food_item
+
+        # Sanitize input text
+        clean_description = sanitize_text(req.food_description)
+
+        logger.info(
+            f"Adding food item for user {user.id}",
+            extra={
+                "user_id": user.id,
+                "food_description": clean_description,
+                "existing_items_count": len(req.existing_items) if req.existing_items else 0
+            }
+        )
+
+        # Parse the new food item using AI
+        new_item = add_food_item(clean_description, req.existing_items)
+
+        logger.info(
+            f"Food item added successfully for user {user.id}",
+            extra={
+                "user_id": user.id,
+                "new_item_name": new_item.name,
+                "calories": new_item.kcal
+            }
+        )
+
+        return AddFoodResp(new_item=new_item)
+
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
+    except Exception as e:
+        log_error(logger, e, {"user_id": user.id, "food_description": clean_description[:100]})
+        raise HTTPException(status_code=500, detail="Failed to add food item")
 
 @app.post("/parse/exercise-text", response_model=ExerciseParse)
 async def parse_exercise_text(req: ParseExerciseTextReq, request: Request, user=Depends(get_current_user)):
@@ -923,11 +1111,27 @@ async def get_today(user=Depends(get_current_user)):
         todays_meals = []
         todays_exercises = []
 
-    # Calculate progress percentages
-    calorie_progress = min(1.0, (kcal_in - kcal_out) / max(1, targets.calories))
-    protein_progress = min(1.0, protein_g / max(1, targets.protein_g))
-    carbs_progress = min(1.0, carbs_g / max(1, targets.carbs_g))
-    fat_progress = min(1.0, fat_g / max(1, targets.fat_g))
+    # Calculate progress percentages with NaN safety
+    import math
+
+    def safe_progress(current, target, is_net_calories=False):
+        """Calculate progress percentage with NaN/None safety"""
+        try:
+            if current is None or target is None:
+                return 0.0
+            if math.isnan(current) or math.isnan(target) or target <= 0:
+                return 0.0
+            if is_net_calories:
+                # Net calories can be negative, handle differently
+                return min(1.0, max(-1.0, current / target))
+            return min(1.0, max(0.0, current / target))
+        except (TypeError, ZeroDivisionError, ValueError):
+            return 0.0
+
+    calorie_progress = safe_progress(kcal_in - kcal_out, targets.calories, is_net_calories=True)
+    protein_progress = safe_progress(protein_g, targets.protein_g)
+    carbs_progress = safe_progress(carbs_g, targets.carbs_g)
+    fat_progress = safe_progress(fat_g, targets.fat_g)
 
     # Activity summary
     activity = ActivitySummary(

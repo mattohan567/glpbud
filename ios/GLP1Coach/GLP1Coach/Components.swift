@@ -70,6 +70,46 @@ struct PrimaryButton: View {
     }
 }
 
+// MARK: - Secondary Button
+struct SecondaryButton: View {
+    let title: String
+    let action: () -> Void
+    let isLoading: Bool
+
+    init(title: String, isLoading: Bool = false, action: @escaping () -> Void) {
+        self.title = title
+        self.isLoading = isLoading
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: {
+            UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+            action()
+        }) {
+            if isLoading {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: Theme.accent))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+            } else {
+                Text(title)
+                    .fontWeight(.semibold)
+                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .background(Color.white.opacity(0.1))
+        .foregroundStyle(Theme.accent)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.cornerRadius.md, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cornerRadius.md, style: .continuous)
+                .stroke(Theme.accent.opacity(0.5), lineWidth: 1)
+        )
+        .disabled(isLoading)
+    }
+}
+
 // MARK: - Pill Segment Picker
 struct PillSegment: View {
     let items: [String]
@@ -106,13 +146,18 @@ struct ProgressRing: View {
     var value: String? = nil
     var size: CGFloat = 110
 
+    /// Safe progress value that handles NaN and infinite values
+    private var safeProgress: CGFloat {
+        progress.isNaN || progress.isInfinite ? 0.0 : progress
+    }
+
     var body: some View {
         ZStack {
             Circle()
                 .stroke(.white.opacity(0.15), lineWidth: 12)
 
             Circle()
-                .trim(from: 0, to: min(progress, 1.0))
+                .trim(from: 0, to: min(safeProgress, 1.0))
                 .stroke(
                     AngularGradient(
                         gradient: Gradient(colors: [Theme.gradientTop, Theme.gradientBottom, Theme.accent]),
@@ -121,10 +166,10 @@ struct ProgressRing: View {
                     style: StrokeStyle(lineWidth: 12, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
-                .animation(.easeOut(duration: 0.7), value: progress)
+                .animation(.easeOut(duration: 0.7), value: safeProgress)
 
             VStack(spacing: 4) {
-                Text(value ?? "\(Int(progress * 100))%")
+                Text(value ?? "\(Int(safeProgress * 100))%")
                     .font(.title2.bold())
                 Text(label)
                     .font(.caption)

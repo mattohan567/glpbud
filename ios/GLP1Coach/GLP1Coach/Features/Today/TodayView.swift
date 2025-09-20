@@ -639,6 +639,17 @@ struct MacroInsightCard: View {
     let calorieProgress: Double
     @State private var isExpanded = false
 
+    /// Safely calculate average progress, handling NaN and invalid values
+    private func safeProgressAverage(_ values: Double...) -> Double {
+        let validValues = values.compactMap { value in
+            value.isNaN || value.isInfinite ? nil : value
+        }
+
+        guard !validValues.isEmpty else { return 0.0 }
+        let average = validValues.reduce(0, +) / Double(validValues.count)
+        return average.isNaN || average.isInfinite ? 0.0 : average
+    }
+
     private var displayInsight: String {
         // Using robust smart templates for optimal performance and cost efficiency
         return fallbackInsight
@@ -648,7 +659,7 @@ struct MacroInsightCard: View {
         let currentHour = Calendar.current.component(.hour, from: Date())
 
         // Smart, robust templates with enhanced logic
-        let overallProgress = (proteinProgress + carbsProgress + fatProgress + calorieProgress) / 4
+        let overallProgress = safeProgressAverage(proteinProgress, carbsProgress, fatProgress, calorieProgress)
         let dominantMacro = getDominantMacro()
         let needsAttention = getMacroNeedsAttention()
 

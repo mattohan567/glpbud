@@ -95,6 +95,23 @@ final class APIClient: ObservableObject {
         return try await post("/parse/meal-audio", Body(audio_data: base64Audio, hints: hints))
     }
 
+    func fixMealParse(originalParse: MealParseDTO, fixPrompt: String) async throws -> MealParseDTO {
+        let body = FixMealParseReq(original_parse: originalParse, fix_prompt: fixPrompt)
+        return try await post("/parse/meal-fix", body)
+    }
+
+    func fixItem(originalItem: MealItemDTO, fixPrompt: String, mealContext: [MealItemDTO]? = nil) async throws -> MealItemDTO {
+        let body = FixItemReq(original_item: originalItem, fix_prompt: fixPrompt, meal_context: mealContext)
+        let response: FixItemResp = try await post("/fix/item", body)
+        return response.updated_item
+    }
+
+    func addFood(foodDescription: String, existingItems: [MealItemDTO]? = nil) async throws -> MealItemDTO {
+        let body = AddFoodReq(food_description: foodDescription, existing_items: existingItems)
+        let response: AddFoodResp = try await post("/add/food", body)
+        return response.new_item
+    }
+
     func transcribeAudio(audioData: Data) async throws -> String {
         struct Body: Codable {
             let audio_data: String  // base64 encoded audio
@@ -217,8 +234,15 @@ final class APIClient: ObservableObject {
         ))
     }
     
+    // MARK: - Fix Endpoints
+
+    func fixMeal(originalParse: MealParseDTO, fixPrompt: String) async throws -> FixMealResp {
+        let body = FixMealParseReq(original_parse: originalParse, fix_prompt: fixPrompt)
+        return try await post("/fix/meal", body)
+    }
+
     // MARK: - History Endpoints
-    
+
     func getHistory(limit: Int = 50, offset: Int = 0, typeFilter: String? = nil) async throws -> HistoryResp {
         var urlString = "/history?limit=\(limit)&offset=\(offset)"
         if let typeFilter = typeFilter {
@@ -246,7 +270,9 @@ final class APIClient: ObservableObject {
         struct DeleteResp: Codable {
             let message: String
         }
-        let _: DeleteResp = try await delete("/history/\(entryType)/\(entryId)")
+        print("🗑️ APIClient deleteEntry - Type: \(entryType), ID: \(entryId)")
+        let response: DeleteResp = try await delete("/history/\(entryType)/\(entryId)")
+        print("✅ APIClient deleteEntry response: \(response.message)")
     }
     
     // MARK: - Network Helpers
@@ -454,16 +480,16 @@ final class APIClient: ObservableObject {
         let url = URL(string: base.absoluteString + path)!
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
-        
+
         if let token = authToken {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        
+
         let (data, response) = try await URLSession.shared.data(for: request)
-        
+
         // Check for HTTP errors
         if let httpResponse = response as? HTTPURLResponse {
-            print("📡 PUT \(path) - Status: \(httpResponse.statusCode)")
+            print("📡 DELETE \(path) - Status: \(httpResponse.statusCode)")
             
             if httpResponse.statusCode == 401 {
                 throw APIError.unauthorized
