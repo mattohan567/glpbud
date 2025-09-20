@@ -430,7 +430,110 @@ final class DataStore: ObservableObject {
     }
 
     var dailyTip: String? {
-        todayStats?.daily_tip
+        // Generate local daily tips for cost efficiency instead of using backend AI
+        generateLocalDailyTip()
+    }
+
+    private func generateLocalDailyTip() -> String? {
+        guard let stats = todayStats else { return nil }
+
+        let dayOfWeek = Calendar.current.component(.weekday, from: Date())
+        let calorieProgress = stats.calorie_progress
+        let proteinProgress = stats.protein_progress
+        let streakDays = stats.streak_days
+        let mealsLogged = stats.activity.meals_logged
+
+        // Generate tips based on patterns and day of week
+        if streakDays >= 7 {
+            return generateStreakTip(streakDays: streakDays)
+        } else if mealsLogged < 2 {
+            return generateLoggingTip()
+        } else if calorieProgress < 0.5 {
+            return generateLowCalorieTip(dayOfWeek: dayOfWeek)
+        } else if calorieProgress > 1.2 {
+            return generateHighCalorieTip()
+        } else if proteinProgress < 0.6 {
+            return generateProteinTip()
+        } else {
+            return generateGeneralTip(dayOfWeek: dayOfWeek)
+        }
+    }
+
+    private func generateStreakTip(streakDays: Int) -> String {
+        let tips = [
+            "Amazing \(streakDays)-day streak! Consistency is building lasting healthy habits.",
+            "Your \(streakDays)-day tracking streak shows real commitment to your health goals.",
+            "Fantastic \(streakDays) days in a row! You're creating sustainable lifestyle changes."
+        ]
+        return tips.randomElement() ?? tips[0]
+    }
+
+    private func generateLoggingTip() -> String {
+        let tips = [
+            "Complete logging helps identify patterns and improve your nutrition awareness.",
+            "Tracking all meals gives you better insights into your daily eating habits.",
+            "Consistent logging is the foundation of successful nutrition management."
+        ]
+        return tips.randomElement() ?? tips[0]
+    }
+
+    private func generateLowCalorieTip(dayOfWeek: Int) -> String {
+        let weekendTips = [
+            "Weekend energy needs vary - listen to your body's hunger cues today.",
+            "Rest days might need fewer calories, but ensure you're still nourishing properly."
+        ]
+
+        let weekdayTips = [
+            "Consider adding nutrient-dense foods if you're feeling low energy today.",
+            "Your body needs adequate fuel for daily activities and recovery."
+        ]
+
+        let tips = (dayOfWeek == 1 || dayOfWeek == 7) ? weekendTips : weekdayTips
+        return tips.randomElement() ?? tips[0]
+    }
+
+    private func generateHighCalorieTip() -> String {
+        let tips = [
+            "High calorie days happen! Focus on tomorrow's fresh start and balanced choices.",
+            "One day doesn't define your progress - consistency over time matters most.",
+            "Consider lighter, nutrient-rich foods for your next few meals to balance out."
+        ]
+        return tips.randomElement() ?? tips[0]
+    }
+
+    private func generateProteinTip() -> String {
+        let tips = [
+            "Protein helps with satiety and muscle maintenance throughout the day.",
+            "Spreading protein across meals can improve absorption and energy levels.",
+            "Quality protein sources support your body's repair and recovery processes."
+        ]
+        return tips.randomElement() ?? tips[0]
+    }
+
+    private func generateGeneralTip(dayOfWeek: Int) -> String {
+        let mondayTips = [
+            "Monday motivation: Small consistent choices lead to big health improvements.",
+            "Start your week strong - every healthy choice builds momentum for the days ahead."
+        ]
+
+        let fridayTips = [
+            "Friday feeling good! Your week of tracking shows real dedication to your health.",
+            "End your week proud - you've made conscious choices about your nutrition."
+        ]
+
+        let generalTips = [
+            "Hydration supports every bodily function - don't forget your water intake today.",
+            "Mindful eating helps you enjoy food more and recognize natural hunger cues.",
+            "Your nutrition journey is unique - focus on progress, not perfection.",
+            "Balanced nutrition supports both physical health and mental well-being.",
+            "Small daily improvements compound into significant long-term health benefits."
+        ]
+
+        switch dayOfWeek {
+        case 2: return mondayTips.randomElement() ?? generalTips[0]
+        case 6: return fridayTips.randomElement() ?? generalTips[1]
+        default: return generalTips.randomElement() ?? generalTips[0]
+        }
     }
 
     var weeklyInsights: String? {
