@@ -34,22 +34,38 @@ final class APIClient: ObservableObject {
     init() {
         self.base = URL(string: Config.apiBaseURL)!
 
-        // In development, use test token if no JWT available
-        #if DEBUG
-        if let jwt = UserDefaults.standard.string(forKey: "supabase_jwt"), !jwt.isEmpty {
-            self.authToken = jwt
-        } else {
-            // Use test token for development
-            self.authToken = "test-token"
-            print("🔧 Using test token for development")
-        }
-        #else
+        // Always start with stored JWT token, will be updated via updateAuthToken
         self.authToken = UserDefaults.standard.string(forKey: "supabase_jwt")
-        #endif
+
+        // Setup auth state observer to keep token in sync
+        setupAuthObserver()
+    }
+
+    private func setupAuthObserver() {
+        // Listen for auth state changes to keep token fresh
+        Task {
+            await refreshAuthToken()
+        }
+
+        // Also setup a periodic refresh mechanism
+        Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
+            Task {
+                await self.refreshAuthToken()
+            }
+        }
+    }
+
+    private func refreshAuthToken() async {
+        if let token = await authManager.getAccessToken() {
+            await updateAuthToken(token)
+        }
     }
     
-    func updateAuthToken(_ token: String) {
-        self.authToken = token
+    func updateAuthToken(_ token: String) async {
+        await MainActor.run {
+            self.authToken = token
+            print("🔑 Updated API client token: \(token.prefix(20))...")
+        }
     }
     
     // MARK: - Parse Endpoints
@@ -241,7 +257,7 @@ final class APIClient: ObservableObject {
 
         // Get the refreshed token
         if let newToken = await authManager.getAccessToken() {
-            self.authToken = newToken
+            await updateAuthToken(newToken)
             print("✅ Token refreshed successfully")
         } else {
             print("❌ Token refresh failed - user will be signed out")

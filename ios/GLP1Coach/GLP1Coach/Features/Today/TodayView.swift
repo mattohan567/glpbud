@@ -639,45 +639,96 @@ struct MacroInsightCard: View {
     let calorieProgress: Double
     @State private var isExpanded = false
 
-    private var macroInsight: String {
+    private var displayInsight: String {
+        // Using robust smart templates for optimal performance and cost efficiency
+        return fallbackInsight
+    }
+
+    private var fallbackInsight: String {
         let currentHour = Calendar.current.component(.hour, from: Date())
 
-        // Time-based recommendations
-        if currentHour < 12 {
-            // Morning - focus on what's needed for the day
-            if proteinProgress < 0.3 {
-                return "Start your day with protein! You need \(Int(targets.protein_g - protein))g more to hit your target."
-            } else if carbsProgress < 0.25 {
-                return "Add some healthy carbs to fuel your day! You need \(Int(targets.carbs_g - carbs))g more."
-            } else if calorieProgress < 0.25 {
-                return "Good morning! You have \(targets.calories - calories) calories to work with today. Plan your meals accordingly."
+        // Smart, robust templates with enhanced logic
+        let overallProgress = (proteinProgress + carbsProgress + fatProgress + calorieProgress) / 4
+        let dominantMacro = getDominantMacro()
+        let needsAttention = getMacroNeedsAttention()
+
+        // Time-based intelligent responses
+        if currentHour < 10 {
+            // Early morning (6-10am)
+            if overallProgress < 0.2 {
+                return "Good morning! Fresh start with plenty of nutrition space ahead."
+            } else if needsAttention == "protein" {
+                return "Morning progress looks good! Consider protein for sustained energy."
+            } else {
+                return "Great morning start! You're building momentum for the day."
             }
-        } else if currentHour < 17 {
-            // Afternoon - mid-day check
-            if calorieProgress > 0.8 {
-                return "You're at \(Int(calorieProgress * 100))% of your calorie target. Consider lighter options for dinner."
-            } else if proteinProgress < 0.6 {
-                return "Lunch time! Add \(Int(targets.protein_g - protein))g protein to stay on track for your daily goal."
-            } else if fatProgress < 0.5 {
-                return "Your healthy fats are low! Add \(Int(targets.fat_g - fat))g through nuts, olive oil, or avocado."
+        } else if currentHour < 14 {
+            // Late morning to lunch (10am-2pm)
+            if calorieProgress > 0.7 {
+                return "Strong midday progress! You're at \(Int(calorieProgress * 100))% of calories."
+            } else if overallProgress > 0.6 {
+                return "Excellent lunch time balance! Good macro distribution so far."
+            } else if needsAttention != nil {
+                return "Solid progress! Room for more \(needsAttention ?? "balance") this afternoon."
+            } else {
+                return "Good midday check-in! Steady progress toward your goals."
+            }
+        } else if currentHour < 19 {
+            // Afternoon to dinner (2pm-7pm)
+            if calorieProgress > 1.0 {
+                return "Above target! You've had \(Int(calorieProgress * 100))% of daily calories."
+            } else if overallProgress > 0.8 {
+                return "Fantastic afternoon! You're well-balanced across all macros."
+            } else if dominantMacro != nil {
+                return "Good \(dominantMacro!) intake! Space for other macros tonight."
+            } else {
+                return "Steady afternoon progress! Room for balanced dinner choices."
             }
         } else {
-            // Evening - wrap up the day
-            if calorieProgress > 1.1 {
-                return "You've exceeded your calorie target by \(calories - targets.calories) kcal. Consider some light exercise!"
-            } else if proteinProgress < 0.8 {
-                return "Evening protein boost needed! Add \(Int(targets.protein_g - protein))g to reach your target."
-            } else if carbsProgress < 0.7 {
-                return "You need \(Int(targets.carbs_g - carbs))g more carbs. Consider some fruit or whole grains with dinner."
-            } else if fatProgress < 0.7 {
-                return "Add \(Int(targets.fat_g - fat))g healthy fats to complete your macro goals for the day."
-            } else if calorieProgress >= 0.8 && calorieProgress <= 1.1 {
-                return "Great job today! You're right on track with your nutrition goals. 🎯"
+            // Evening (7pm+)
+            if calorieProgress >= 0.9 && calorieProgress <= 1.1 {
+                return "Perfect day! You hit your nutrition targets beautifully. 🎯"
+            } else if overallProgress > 0.85 {
+                return "Excellent day overall! Great macro balance achieved."
+            } else if calorieProgress > 1.2 {
+                return "Over calories today. Tomorrow's a fresh start!"
+            } else if needsAttention != nil {
+                return "Good evening! Light \(needsAttention ?? "snack") could help if hungry."
+            } else {
+                return "Solid nutrition day! You're building healthy habits."
             }
         }
-
-        return "You're doing great! Keep tracking to stay on target with your nutrition goals."
     }
+
+    private func getDominantMacro() -> String? {
+        let progresses = [
+            ("protein", proteinProgress),
+            ("carbs", carbsProgress),
+            ("fat", fatProgress)
+        ]
+
+        let sorted = progresses.sorted { $0.1 > $1.1 }
+        let highest = sorted[0]
+        let secondHighest = sorted[1]
+
+        // Only return if significantly higher than others
+        if highest.1 > 0.7 && highest.1 - secondHighest.1 > 0.3 {
+            return highest.0
+        }
+        return nil
+    }
+
+    private func getMacroNeedsAttention() -> String? {
+        let needs = [
+            ("protein", proteinProgress < 0.6),
+            ("carbs", carbsProgress < 0.5),
+            ("fat", fatProgress < 0.5)
+        ].filter { $0.1 }.map { $0.0 }
+
+        return needs.first
+    }
+
+
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -692,7 +743,7 @@ struct MacroInsightCard: View {
 
                 Spacer()
 
-                if macroInsight.count > 100 {
+                if fallbackInsight.count > 100 {
                     Button(action: {
                         withAnimation(.easeInOut(duration: 0.3)) {
                             isExpanded.toggle()
@@ -709,7 +760,7 @@ struct MacroInsightCard: View {
                     .foregroundStyle(Theme.warn)
             }
 
-            Text(macroInsight)
+            Text(displayInsight)
                 .font(.subheadline)
                 .foregroundStyle(Theme.textPrimary)
                 .multilineTextAlignment(.leading)

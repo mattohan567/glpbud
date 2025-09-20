@@ -57,6 +57,7 @@ struct GLP1CoachApp: App {
         Task {
             if let token = await authManager.getAccessToken() {
                 await apiClient.updateAuthToken(token)
+                print("🚀 App setup: Updated API client with fresh token")
             }
         }
     }
